@@ -1,0 +1,316 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+    <uses-permission android:name="android.permission.CALL_PHONE" />
+    <uses-permission android:name="android.permission.ANSWER_PHONE_CALLS" />
+    <uses-permission android:name="android.permission.READ_CALL_LOG" />
+    <uses-permission android:name="android.permission.WRITE_CALL_LOG" />
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Buzz the 1-minute warning before the in-call sleep timer hangs up -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- Read the connected Bluetooth headset's name to show it on the in-call screen -->
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <!-- Optional keep-alive foreground service + restart after reboot -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <!-- Lets us prompt the user to exempt the app from battery optimization (Doze) -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- Move system call-recording files into a Music sub-folder (files owned by
+         the MTK recorder, so this needs broad file access on Android 11+) -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+    <!-- In-app updater: fetch the latest release from GitHub and install the APK -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- Visual voicemail (OMTP/CVVM/VVM3): receive the carrier's status SMS and
+         store downloaded voicemails in the platform voicemail provider. -->
+    <uses-permission android:name="android.permission.RECEIVE_SMS" />
+    <uses-permission android:name="android.permission.SEND_SMS" />
+    <!-- Some carriers' VVM IMAP gateway (e.g. Verizon VVM3) is only reachable over
+         the carrier's own cellular data, not Wi-Fi. Need these to explicitly
+         request/bind to the cellular network for those IMAP connections. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.READ_PHONE_NUMBERS" />
+    <uses-permission android:name="com.android.voicemail.permission.ADD_VOICEMAIL" />
+    <uses-permission android:name="com.android.voicemail.permission.READ_VOICEMAIL" />
+    <uses-permission android:name="com.android.voicemail.permission.WRITE_VOICEMAIL" />
+
+    <application
+        android:name=".App"
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:supportsRtl="true"
+        android:localeConfig="@xml/locale_config"
+        android:theme="@style/Theme.M5Dialer">
+
+        <!-- Single host for Recents + Dialer (tabs swap inside, persistent bottom bar). -->
+        <activity
+            android:name=".HomeActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="stateHidden|adjustNothing">
+            <!-- App icon opens the host (lands on Recents). -->
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- Home-screen Send key → Recents. -->
+            <intent-filter>
+                <action android:name="android.intent.action.CALL_BUTTON" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <!-- Marks this app as a phone/dialer app so it is eligible for ROLE_DIALER -->
+            <intent-filter>
+                <action android:name="android.intent.action.DIAL" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <!-- DIAL tel: → Dialer tab, pre-filled -->
+            <intent-filter>
+                <action android:name="android.intent.action.DIAL" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="tel" />
+            </intent-filter>
+            <!-- VIEW/DIAL tel: from links → Dialer tab -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <action android:name="android.intent.action.DIAL" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="tel" />
+            </intent-filter>
+        </activity>
+
+        <activity android:name=".CallHistoryActivity" android:exported="false" />
+        <activity android:name=".CallLogSearchActivity" android:exported="false" />
+        <activity android:name=".MissedCallsActivity" android:exported="false" />
+        <activity android:name=".ContactsActivity" android:exported="false" />
+        <activity android:name=".StarredActivity" android:exported="false" />
+        <activity android:name=".SettingsActivity" android:exported="false" />
+        <activity android:name=".ThemeSettingsActivity" android:exported="false" />
+        <activity android:name=".NameFormatSettingsActivity" android:exported="false" />
+        <activity android:name=".IncomingCallGestureActivity" android:exported="false" />
+        <activity android:name=".CallInsightsActivity" android:exported="false" />
+        <activity android:name=".LanguageSettingsActivity" android:exported="false" />
+        <activity android:name=".ToggleSettingActivity" android:exported="false" />
+        <activity android:name=".BlockedNumbersActivity" android:exported="false" />
+        <activity android:name=".QuickResponsesActivity" android:exported="false" />
+        <activity android:name=".QuickDialActivity" android:exported="false" />
+        <activity android:name=".QuickDialRecentsActivity" android:exported="false" />
+        <activity android:name=".AssistedDialingActivity" android:exported="false" />
+        <activity android:name=".CallingAccountsActivity" android:exported="false" />
+        <activity android:name=".AboutActivity" android:exported="false" />
+        <activity android:name=".KeypadSettingsActivity" android:exported="false" />
+        <activity android:name=".ScreenProfileActivity" android:exported="false" />
+        <activity android:name=".RedirectSettingsActivity" android:exported="false" />
+        <activity android:name=".ProximityLatchSettingActivity" android:exported="false" />
+        <activity android:name=".KeepAliveSettingsActivity" android:exported="false" />
+        <activity android:name=".RecordingSettingsActivity" android:exported="false" />
+        <activity android:name=".CallStatsActivity" android:exported="false" />
+        <activity android:name=".UpdateActivity" android:exported="false" />
+        <activity android:name=".VoicemailSettingsActivity" android:exported="false" />
+        <activity android:name=".VoicemailChangePinActivity" android:exported="false" />
+        <activity android:name=".VoicemailGreetingActivity" android:exported="false" />
+
+        <activity android:name=".WelcomeActivity" android:exported="false" />
+        <activity android:name=".LegalActivity" android:exported="false" />
+        <activity
+            android:name=".SetDefaultActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:excludeFromRecents="true" />
+
+        <!-- The in-call screen. We own this UI as the default dialer. -->
+        <activity
+            android:name=".InCallActivity"
+            android:exported="true"
+            android:theme="@style/Theme.M5Dialer.InCall"
+            android:launchMode="singleTop"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:excludeFromRecents="true"
+            android:configChanges="orientation|screenSize|keyboardHidden" />
+        <!-- NOTE: exported=true is TEMPORARY so the layout can be previewed via adb;
+             revert to false before release (real calls launch it in-process). -->
+
+        <!-- System hands live calls to this service once we are the default dialer.
+             IN_CALL_SERVICE_UI = true means we provide the in-call UI ourselves. -->
+        <service
+            android:name=".CallService"
+            android:exported="true"
+            android:directBootAware="true"
+            android:foregroundServiceType="phoneCall"
+            android:permission="android.permission.BIND_INCALL_SERVICE">
+            <meta-data
+                android:name="android.telecom.IN_CALL_SERVICE_UI"
+                android:value="true" />
+            <intent-filter>
+                <action android:name="android.telecom.InCallService" />
+            </intent-filter>
+        </service>
+
+        <!-- Telecom binds this as part of its incoming-call filtering pipeline,
+             BEFORE the call ever reaches CallService/InCallService — and it will
+             start our process for it even if the app was force-stopped or fully
+             killed (confirmed via logcat: Google Dialer's own CallScreeningService
+             gets exactly this early process-start treatment, which is why calls
+             surface for it reliably while ours, having no such service declared,
+             gets "no call screening service defined" and never gets an early
+             wake at all). This makes our app do the same: no actual screening
+             logic, just a legitimate, OS-sanctioned reason for Telecom to start
+             our process ahead of the call, the same way Google's does. -->
+        <service
+            android:name=".CallScreener"
+            android:exported="true"
+            android:permission="android.permission.BIND_SCREENING_SERVICE">
+            <intent-filter>
+                <action android:name="android.telecom.CallScreeningService" />
+            </intent-filter>
+        </service>
+
+        <!-- Optional keep-alive: pins our process so incoming calls still
+             surface on ROMs that freeze background apps (DuraSpeed). Off until
+             enabled in Settings → Keep running in background. -->
+        <service
+            android:name=".KeepAliveService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="keep_dialer_resident_for_incoming_calls" />
+        </service>
+
+        <!-- Restarts the keep-alive service after a reboot (if the user enabled it). -->
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="true"
+            android:directBootAware="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Optional, opt-in: redirects the launcher's hardcoded stock-dialer Send
+             key to our recents. Disabled until enabled in Accessibility settings. -->
+        <service
+            android:name=".DialerRedirectService"
+            android:exported="true"
+            android:label="@string/redirect_service_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/dialer_redirect_service" />
+        </service>
+
+        <!-- Optional, opt-in: lets ProximityController lock the screen directly
+             instead of relying on PROXIMITY_SCREEN_OFF_WAKE_LOCK's own re-light
+             behavior. Disabled until enabled in Accessibility settings. -->
+        <service
+            android:name=".ProximityAccessibilityService"
+            android:exported="true"
+            android:label="@string/proximity_lock_service_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/proximity_lock_service" />
+        </service>
+
+        <!-- Shares downloaded update APKs with the system package installer. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
+        <!-- Handles the ongoing-call notification action buttons. -->
+        <receiver
+            android:name=".NotificationActionReceiver"
+            android:exported="false" />
+
+        <!-- Periodic background update check (scheduled via AlarmManager). -->
+        <receiver
+            android:name=".UpdateCheckReceiver"
+            android:exported="false" />
+
+        <!-- Fires a "call back" reminder set from the Call back list (scheduled
+             via AlarmManager). -->
+        <receiver
+            android:name=".CallBackReminderReceiver"
+            android:exported="false" />
+
+        <!-- Fires the in-call sleep timer's auto-hangup (and 1-minute warning),
+             scheduled via AlarmManager. -->
+        <receiver
+            android:name=".SleepTimerReceiver"
+            android:exported="false" />
+
+        <!-- Official hook: when we're the default dialer, Telecom delegates the
+             missed-call notification to us here instead of posting its own. -->
+        <receiver
+            android:name=".MissedCallReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.telecom.action.SHOW_MISSED_CALLS_NOTIFICATION" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Same official default-dialer delegation hook as MissedCallReceiver
+             above, but for legacy (non-visual) voicemail notifications:
+             lets us suppress the "call in" prompt once VVM is connected. -->
+        <receiver
+            android:name=".vvm.LegacyVoicemailReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.telephony.action.SHOW_VOICEMAIL_NOTIFICATION" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Visual Voicemail: the platform binds this (we're the default dialer)
+             to deliver OMTP STATUS/SYNC SMS from the carrier. -->
+        <service
+            android:name=".vvm.VvmService"
+            android:exported="true"
+            android:permission="android.permission.BIND_VISUAL_VOICEMAIL_SERVICE">
+            <intent-filter>
+                <action android:name="android.telephony.VisualVoicemailService" />
+            </intent-filter>
+        </service>
+
+        <!-- Logs the OMTP Activate SMS send result. -->
+        <receiver
+            android:name=".vvm.VvmSmsSentReceiver"
+            android:exported="false" />
+
+        <!-- Catches the carrier's OMTP data SMS on the VVM port (CVVM=1808) that the
+             platform VVM filter drops on this ROM; we parse it ourselves. -->
+        <receiver
+            android:name=".vvm.VvmSmsReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.DATA_SMS_RECEIVED" />
+                <data android:scheme="sms" android:host="localhost" android:port="1808" />
+            </intent-filter>
+        </receiver>
+
+    </application>
+
+</manifest>
