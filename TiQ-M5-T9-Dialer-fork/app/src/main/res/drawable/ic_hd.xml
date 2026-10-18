@@ -1,0 +1,17 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="18dp" android:height="14dp"
+    android:viewportWidth="26" android:viewportHeight="20">
+    <!-- Rounded outline frame -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="@android:color/white"
+        android:strokeWidth="1.8"
+        android:pathData="M4.2,3H21.8A2.2,2.2 0 0 1 24,5.2V14.8A2.2,2.2 0 0 1 21.8,17H4.2A2.2,2.2 0 0 1 2,14.8V5.2A2.2,2.2 0 0 1 4.2,3Z"/>
+    <!-- "H" -->
+    <path android:fillColor="@android:color/white"
+        android:pathData="M6,6H7.4V9.3H10V6H11.4V14H10V10.7H7.4V14H6V6Z"/>
+    <!-- "D" with counter cut out -->
+    <path android:fillColor="@android:color/white"
+        android:fillType="evenOdd"
+        android:pathData="M14,6H17A4,4 0 0 1 17,14H14V6ZM15.6,7.6H17A2.4,2.4 0 0 1 17,12.4H15.6V7.6Z"/>
+</vector>

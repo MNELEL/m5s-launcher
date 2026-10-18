@@ -1,0 +1,358 @@
+package com.puretech.dialer
+
+import android.content.Context
+import android.content.SharedPreferences
+import androidx.appcompat.app.AppCompatDelegate
+import androidx.core.os.LocaleListCompat
+import java.util.Locale
+
+/** Central app settings (theme, assisted dialing, default SIM, quick responses). */
+object Prefs {
+    private const val FILE = "m5_dialer_prefs"
+
+    const val THEME_SYSTEM = 0
+    const val THEME_LIGHT = 1
+    const val THEME_DARK = 2
+
+    private fun sp(c: Context): SharedPreferences =
+        c.getSharedPreferences(FILE, Context.MODE_PRIVATE)
+
+    // --- Theme ---------------------------------------------------------------
+
+    fun themeMode(c: Context) = sp(c).getInt("theme", THEME_SYSTEM)
+
+    fun setThemeMode(c: Context, mode: Int) {
+        sp(c).edit().putInt("theme", mode).apply()
+        applyTheme(mode)
+    }
+
+    fun applyTheme(mode: Int) {
+        AppCompatDelegate.setDefaultNightMode(
+            when (mode) {
+                THEME_LIGHT -> AppCompatDelegate.MODE_NIGHT_NO
+                THEME_DARK -> AppCompatDelegate.MODE_NIGHT_YES
+                else -> AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM
+            }
+        )
+    }
+
+    // --- Display: name format --------------------------------------------------
+
+    /** How contact/caller names are shown everywhere in the app: "First Last"
+     *  (default) or "Last, First". See [NameFormat]. */
+    fun lastNameFirst(c: Context) = sp(c).getBoolean("last_name_first", false)
+    fun setLastNameFirst(c: Context, on: Boolean) =
+        sp(c).edit().putBoolean("last_name_first", on).apply()
+
+    // --- Screen profile -------------------------------------------------------
+
+    const val PROFILE_SMALL = 0
+    const val PROFILE_LARGE = 1
+
+    /** SMALL = keypad-phone design (default). LARGE = smartphone-optimized:
+     *  bigger in-call controls, on-screen keypad auto-opens every time the
+     *  dial screen is visited, bottom nav bar never hides on scroll. */
+    fun screenProfile(c: Context) = sp(c).getInt("screen_profile", PROFILE_SMALL)
+
+    fun setScreenProfile(c: Context, profile: Int) {
+        sp(c).edit().putInt("screen_profile", profile).apply()
+        if (profile == PROFILE_LARGE) {
+            setKeypadDefaultOpen(c, true)
+            setBigKeypad(c, true)
+        }
+        // Switching back to SMALL intentionally leaves these two alone from
+        // here on — they become the user's own independent choice, same as
+        // any other setting in KeypadSettingsActivity.
+    }
+
+    /** Whether the user has been asked (onboarding or Settings) to pick a
+     *  screen profile at least once. Independent of [welcomeShown] so
+     *  upgrading users who already passed the old onboarding are asked once too. */
+    fun screenProfileChosen(c: Context) = sp(c).getBoolean("screen_profile_chosen", false)
+    fun setScreenProfileChosen(c: Context) =
+        sp(c).edit().putBoolean("screen_profile_chosen", true).apply()
+
+    /** In-app color theme id (0 = Default / device dynamic color). See [DialerThemes]. */
+    fun colorTheme(c: Context) = sp(c).getInt("color_theme", DialerThemes.DEFAULT)
+    fun setColorTheme(c: Context, id: Int) {
+        sp(c).edit().putInt("color_theme", id).apply()
+    }
+
+    // --- Assisted dialing / home country ------------------------------------
+
+    fun assistedDialing(c: Context) = sp(c).getBoolean("assisted", true)
+    fun setAssistedDialing(c: Context, on: Boolean) =
+        sp(c).edit().putBoolean("assisted", on).apply()
+
+    /** Stored home-country ISO, or null when set to auto-detect. */
+    fun homeCountryOverride(c: Context): String? = sp(c).getString("home_country", null)
+    fun setHomeCountry(c: Context, iso: String?) =
+        sp(c).edit().putString("home_country", iso).apply()
+
+    /** Effective home country: manual override, else SIM/network ISO, else device locale. */
+    fun homeCountry(c: Context): String {
+        homeCountryOverride(c)?.let { return it.uppercase(Locale.US) }
+        return detectedCountry(c)
+    }
+
+    fun detectedCountry(c: Context): String {
+        val tm = c.getSystemService(android.telephony.TelephonyManager::class.java)
+        val iso = tm?.simCountryIso?.ifBlank { null }
+            ?: tm?.networkCountryIso?.ifBlank { null }
+            ?: Locale.getDefault().country
+        return iso.uppercase(Locale.US)
+    }
+
+    // --- Default calling account (dual SIM) ---------------------------------
+
+    fun defaultAccountId(c: Context): String? = sp(c).getString("default_account", null)
+    fun setDefaultAccountId(c: Context, id: String?) =
+        sp(c).edit().putString("default_account", id).apply()
+
+    // --- UI state ------------------------------------------------------------
+
+    /** Whether the call-log Favorites strip is expanded (persists across launches). */
+    fun favoritesExpanded(c: Context) = sp(c).getBoolean("favorites_expanded", false)
+    fun setFavoritesExpanded(c: Context, expanded: Boolean) =
+        sp(c).edit().putBoolean("favorites_expanded", expanded).apply()
+
+    /** Starred page sort mode: 0 = date newest first, 1 = date oldest first, 2 = name. */
+    fun starredSortMode(c: Context) = sp(c).getInt("starred_sort_mode", 0)
+    fun setStarredSortMode(c: Context, mode: Int) =
+        sp(c).edit().putInt("starred_sort_mode", mode).apply()
+
+    /** Whether to show the optional floating on-screen-keypad button on the dial screen. */
+    fun floatingDialButton(c: Context) = sp(c).getBoolean("floating_dial", false)
+    fun setFloatingDialButton(c: Context, on: Boolean) =
+        sp(c).edit().putBoolean("floating_dial", on).apply()
+
+    /** Open the on-screen keypad automatically every time the dial screen opens.
+     *  It can still be minimized for the session and reopens on the next launch.
+     *  For people who prefer to dial on-screen instead of with the hardware keys. */
+    fun keypadDefaultOpen(c: Context) = sp(c).getBoolean("keypad_default_open", false)
+    fun setKeypadDefaultOpen(c: Context, on: Boolean) =
+        sp(c).edit().putBoolean("keypad_default_open", on).apply()
+
+    /** Make the on-screen keypad large (smartphone size) and add a green dial
+     *  button at the bottom, so the app is usable on a normal touchscreen too. */
+    fun bigKeypad(c: Context) = sp(c).getBoolean("big_keypad", false)
+    fun setBigKeypad(c: Context, on: Boolean) =
+        sp(c).edit().putBoolean("big_keypad", on).apply()
+
+    const val GESTURE_TAP = 0
+    const val GESTURE_SWIPE = 1
+
+    /** How to answer/decline an incoming call: a single tap on the round
+     *  Answer/Decline buttons (default), or sliding a button sideways
+     *  (Google-style). Falls back to the pre-1.2.3 boolean "swipe to answer"
+     *  toggle's value the first time this is read, so upgrading users who'd
+     *  already turned swipe on keep their choice. */
+    fun incomingCallGesture(c: Context): Int {
+        val prefs = sp(c)
+        if (!prefs.contains("incoming_call_gesture") && prefs.getBoolean("swipe_to_answer", false)) {
+            return GESTURE_SWIPE
+        }
+        return prefs.getInt("incoming_call_gesture", GESTURE_TAP)
+    }
+    fun setIncomingCallGesture(c: Context, gesture: Int) =
+        sp(c).edit().putInt("incoming_call_gesture", gesture).apply()
+
+    const val ANSWER_SIDE_LEFT = 0
+    const val ANSWER_SIDE_RIGHT = 1
+
+    /** Which side the round Answer button appears on for an incoming call
+     *  (only applies when [incomingCallGesture] is [GESTURE_TAP]) -- left
+     *  with Decline on the right (default), or the reverse. */
+    fun answerButtonSide(c: Context): Int = sp(c).getInt("answer_button_side", ANSWER_SIDE_LEFT)
+    fun setAnswerButtonSide(c: Context, side: Int) =
+        sp(c).edit().putInt("answer_button_side", side).apply()
+
+    /** When off (default): an incoming call only takes over the full screen
+     *  if the device is locked; while unlocked it shows as a notification
+     *  instead, whether you're on the home screen or in another app. When
+     *  on: always take over the full screen for a ringing call, even while
+     *  the phone is unlocked and in use — the classic phone-ringing look. */
+    fun alwaysFullScreenCalls(c: Context) = sp(c).getBoolean("always_full_screen_calls", false)
+    fun setAlwaysFullScreenCalls(c: Context, on: Boolean) =
+        sp(c).edit().putBoolean("always_full_screen_calls", on).apply()
+
+    /** Reject incoming calls from numbers that aren't saved contacts (and
+     *  withheld/private numbers). Off by default. */
+    fun blockUnknownCallers(c: Context) = sp(c).getBoolean("block_unknown_callers", false)
+    fun setBlockUnknownCallers(c: Context, on: Boolean) =
+        sp(c).edit().putBoolean("block_unknown_callers", on).apply()
+
+    // --- Automatic update checks --------------------------------------------
+
+    const val UPDATE_MANUAL = 0
+    const val UPDATE_DAILY = 1
+    const val UPDATE_WEEKLY = 2
+    const val UPDATE_MONTHLY = 3
+
+    /** How often to check GitHub for a new release in the background.
+     *  Defaults to a once-a-day check. */
+    fun updateFrequency(c: Context) = sp(c).getInt("update_frequency", UPDATE_DAILY)
+    fun setUpdateFrequency(c: Context, mode: Int) =
+        sp(c).edit().putInt("update_frequency", mode).apply()
+
+    /** Tag of the release we last raised a notification for, so a background
+     *  check doesn't notify about the same version more than once. */
+    fun lastNotifiedTag(c: Context): String? = sp(c).getString("last_notified_tag", null)
+    fun setLastNotifiedTag(c: Context, tag: String) =
+        sp(c).edit().putString("last_notified_tag", tag).apply()
+
+    /** Play a DTMF tone when pressing a key on the dial screen. Off by default.
+     *  (In-call keypad tones always play, regardless of this setting.) */
+    fun dialpadTone(c: Context) = sp(c).getBoolean("dialpad_tone", false)
+    fun setDialpadTone(c: Context, on: Boolean) =
+        sp(c).edit().putBoolean("dialpad_tone", on).apply()
+
+    /** Whether the Proximity sensor fix's accessibility permission should also
+     *  stop the screen relighting on its own during earpiece calls (requiring
+     *  a button press instead). Off by default: granting the permission alone
+     *  only unlocks the manual in-call Screen off button (Speaker/Bluetooth) —
+     *  this is a separate opt-in so that doesn't silently disable the normal
+     *  automatic proximity screen on/off at the ear. See [ProximityController]. */
+    fun proximityLatchEnabled(c: Context) = sp(c).getBoolean("proximity_latch_enabled", false)
+    fun setProximityLatchEnabled(c: Context, on: Boolean) =
+        sp(c).edit().putBoolean("proximity_latch_enabled", on).apply()
+
+    /** Keep a foreground service running so incoming calls always surface on
+     *  ROMs that freeze background apps (e.g. DuraSpeed on the F21). Off by
+     *  default because it shows a permanent low-priority notification. */
+    fun keepAlive(c: Context) = sp(c).getBoolean("keep_alive", false)
+    fun setKeepAlive(c: Context, on: Boolean) =
+        sp(c).edit().putBoolean("keep_alive", on).apply()
+
+    /** Last duration (minutes) picked for the in-call sleep timer, pre-selected
+     *  next time the picker opens. */
+    fun sleepTimerMinutes(c: Context) = sp(c).getInt("sleep_timer_minutes", 30)
+    fun setSleepTimerMinutes(c: Context, minutes: Int) =
+        sp(c).edit().putInt("sleep_timer_minutes", minutes).apply()
+
+    /** [SystemClock.elapsedRealtime] the running sleep timer will fire at, 0 if
+     *  none is running. Persisted (not just in-memory) so it survives this
+     *  process being killed and restarted mid-call. */
+    fun sleepTimerDeadlineElapsed(c: Context) = sp(c).getLong("sleep_timer_deadline_elapsed", 0L)
+    fun setSleepTimerDeadlineElapsed(c: Context, atElapsedRealtime: Long) =
+        sp(c).edit().putLong("sleep_timer_deadline_elapsed", atElapsedRealtime).apply()
+
+    /** Whether the one-time welcome/onboarding screen has been shown. */
+    fun welcomeShown(c: Context) = sp(c).getBoolean("welcome_shown", false)
+    fun setWelcomeShown(c: Context) = sp(c).edit().putBoolean("welcome_shown", true).apply()
+
+    // --- What's new -------------------------------------------------------------
+
+    /** The versionCode we last showed (or recorded without showing) the What's
+     *  new sheet for. 0 means never recorded — used to tell a fresh install
+     *  (which gets onboarding instead) from a real update. */
+    fun lastSeenVersionCode(c: Context): Long = sp(c).getLong("whats_new_version", 0L)
+    fun setLastSeenVersionCode(c: Context, code: Long) =
+        sp(c).edit().putLong("whats_new_version", code).apply()
+
+    // --- Quick dial ---------------------------------------------------------------
+
+    fun quickDialHelpDismissed(c: Context) = sp(c).getBoolean("quick_dial_help_dismissed", false)
+    fun setQuickDialHelpDismissed(c: Context) =
+        sp(c).edit().putBoolean("quick_dial_help_dismissed", true).apply()
+
+    // --- Quick responses -----------------------------------------------------
+
+    fun quickResponses(c: Context): List<String> {
+        val def = c.resources.getStringArray(R.array.quick_responses)
+        return (0 until def.size).map {
+            sp(c).getString("qr_$it", null) ?: def[it]
+        }
+    }
+
+    fun setQuickResponse(c: Context, index: Int, text: String) =
+        sp(c).edit().putString("qr_$index", text).apply()
+
+    // --- Favorites: default number for multi-number contacts -------------------
+
+    /** The number to dial without asking, for a favorite with several numbers —
+     *  null if the user hasn't picked "don't ask again" for this contact yet. */
+    fun defaultNumberForContact(c: Context, lookupKey: String): String? =
+        sp(c).getString("fav_default_number_$lookupKey", null)
+
+    fun setDefaultNumberForContact(c: Context, lookupKey: String, number: String) =
+        sp(c).edit().putString("fav_default_number_$lookupKey", number).apply()
+
+    // --- Favorites: dialer-only add/remove overlay ------------------------------
+    // Lets the user add or remove a favorite from this app's Favorites strip
+    // without touching the real Contacts app's starred flag (Phone.STARRED).
+    // "Extra" favorites are added here that aren't starred in Contacts, kept in
+    // the order they were added (not alphabetical) and shown after the real
+    // starred ones; "hidden" favorites are real starred contacts the user chose
+    // to hide from just this strip. Merged with the real starred list at read
+    // time in ContactsRepository.loadDialerFavorites.
+
+    /** lookupKeys added as favorites in-app (not starred in the real Contacts
+     *  app), oldest first — this is display order, so it's a list, not a set. */
+    fun extraFavoriteKeys(c: Context): List<String> {
+        val raw = sp(c).getString("extra_favorite_keys_ordered", null) ?: return emptyList()
+        return try {
+            val arr = org.json.JSONArray(raw)
+            List(arr.length()) { arr.getString(it) }
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun saveExtraFavoriteKeys(c: Context, keys: List<String>) {
+        val arr = org.json.JSONArray()
+        keys.forEach { arr.put(it) }
+        sp(c).edit().putString("extra_favorite_keys_ordered", arr.toString()).apply()
+    }
+
+    /** Appends [lookupKey] as the newest extra favorite (moves it to the end if
+     *  it was already one, so re-adding after removal doesn't keep a stale spot). */
+    fun addExtraFavorite(c: Context, lookupKey: String) {
+        val keys = ArrayList(extraFavoriteKeys(c))
+        keys.remove(lookupKey)
+        keys.add(lookupKey)
+        saveExtraFavoriteKeys(c, keys)
+    }
+
+    fun removeExtraFavorite(c: Context, lookupKey: String) {
+        val keys = ArrayList(extraFavoriteKeys(c))
+        keys.remove(lookupKey)
+        saveExtraFavoriteKeys(c, keys)
+    }
+
+    /** lookupKeys of real starred contacts hidden from this app's Favorites strip
+     *  (their Contacts app star is left untouched). */
+    fun hiddenFavoriteKeys(c: Context): Set<String> =
+        sp(c).getStringSet("hidden_favorite_keys", emptySet()) ?: emptySet()
+
+    fun hideFavorite(c: Context, lookupKey: String) {
+        val set = HashSet(hiddenFavoriteKeys(c))
+        set.add(lookupKey)
+        sp(c).edit().putStringSet("hidden_favorite_keys", set).apply()
+    }
+
+    /** Un-hides a real starred contact that was previously hidden from the strip —
+     *  used when the user re-adds an already-starred contact via the Add picker,
+     *  so it returns to the starred (front) section instead of becoming an extra. */
+    fun unhideFavorite(c: Context, lookupKey: String) {
+        val set = HashSet(hiddenFavoriteKeys(c))
+        set.remove(lookupKey)
+        sp(c).edit().putStringSet("hidden_favorite_keys", set).apply()
+    }
+
+    // --- App language override --------------------------------------------------
+
+    /** BCP-47 tag of the manually chosen language (e.g. "es"), or "" for system default. */
+    fun language(c: Context): String = sp(c).getString("app_language", "").orEmpty()
+
+    fun setLanguage(c: Context, tag: String) {
+        sp(c).edit().putString("app_language", tag).apply()
+    }
+
+    fun applyLanguage(c: Context) {
+        val tag = language(c)
+        val locales = if (tag.isEmpty()) LocaleListCompat.getEmptyLocaleList()
+                      else LocaleListCompat.forLanguageTags(tag)
+        AppCompatDelegate.setApplicationLocales(locales)
+    }
+}

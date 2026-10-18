@@ -1,0 +1,460 @@
+package com.puretech.dialer
+
+import android.Manifest
+import android.content.pm.PackageManager
+import android.content.res.ColorStateList
+import android.net.Uri
+import android.os.Bundle
+import android.provider.CallLog
+import android.provider.ContactsContract
+import android.telecom.TelecomManager
+import android.telephony.PhoneNumberUtils
+import android.text.format.DateUtils
+import android.view.LayoutInflater
+import android.view.View
+import android.view.ViewGroup
+import android.widget.ImageView
+import android.widget.TextView
+import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
+import com.puretech.dialer.databinding.ActivityCallHistoryBinding
+import java.util.Calendar
+import java.util.Locale
+
+/** All calls (grouped, with duration) for a single number — Google card style. */
+class CallHistoryActivity : AppCompatActivity() {
+
+    private lateinit var binding: ActivityCallHistoryBinding
+    private val telecomManager by lazy { getSystemService(TelecomManager::class.java) }
+    private var number = ""
+    private lateinit var adapter: HistoryAdapter
+    private var allDetails: List<CallDetail> = emptyList()
+
+    private val callPermLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted -> if (granted) placeCall() }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        binding = ActivityCallHistoryBinding.inflate(layoutInflater)
+        setContentView(binding.root)
+
+        number = intent.getStringExtra(EXTRA_NUMBER) ?: ""
+        val name = intent.getStringExtra(EXTRA_NAME)?.takeIf { it.isNotBlank() }
+
+        binding.title.text = name ?: PhoneNumberUtils.formatNumber(number, Locale.US.country) ?: number
+        binding.subtitle.text = PhoneNumberUtils.formatNumber(number, Locale.US.country) ?: number
+        Avatars.bind(binding.avatarInitial, binding.avatarPhoto, name, lookupPhoto(number))
+
+        binding.back.setOnClickListener { finish() }
+        binding.headerInfo.setOnClickListener { openContact() }
+        binding.star.setOnClickListener { toggleStar() }
+        binding.menu.setOnClickListener { showMenu(it) }
+        binding.callFab.setOnClickListener { callNumber() }
+        binding.msgBtn.setOnClickListener {
+            try {
+                startActivity(android.content.Intent(
+                    android.content.Intent.ACTION_SENDTO, Uri.parse("smsto:${Uri.encode(number)}")
+                ))
+            } catch (_: Exception) {
+            }
+        }
+
+        adapter = HistoryAdapter()
+        binding.history.layoutManager = LinearLayoutManager(this)
+        binding.history.adapter = adapter
+        // Slide the Call/Message bar down on scroll, like the rest of the app.
+        binding.history.addOnScrollListener(BottomBarHider(binding.bottomBar))
+
+        binding.filterChips.setOnCheckedStateChangeListener { _, _ -> applyFilter() }
+
+        Thread {
+            val details = CallLogRepository.loadForNumber(applicationContext, number)
+            val starred = StarredStore.isStarred(applicationContext, number)
+            runOnUiThread {
+                allDetails = details
+                applyFilter()
+                isStarred = starred
+                updateStarIcon()
+            }
+        }.start()
+    }
+
+    private var isStarred = false
+
+    private fun updateStarIcon() {
+        binding.star.imageTintList = android.content.res.ColorStateList.valueOf(
+            if (isStarred) themeColor(com.google.android.material.R.attr.colorPrimary)
+            else themeColor(com.google.android.material.R.attr.colorOnSurface)
+        )
+    }
+
+    private fun toggleStar() {
+        if (number.isBlank()) return
+        val ctx = applicationContext
+        val num = number
+        val name = binding.title.text?.toString()
+        val wasStarred = isStarred
+        Thread {
+            if (wasStarred) {
+                StarredStore.unstar(ctx, num)
+            } else {
+                StarredStore.star(ctx, num, name, null)
+            }
+            val nowStarred = StarredStore.isStarred(ctx, num)
+            runOnUiThread {
+                isStarred = nowStarred
+                updateStarIcon()
+                val label = name?.ifBlank { null } ?: num
+                val msg = if (nowStarred) R.string.added_to_callback_list else R.string.removed_from_callback_list
+                Toast.makeText(this, getString(msg, label), Toast.LENGTH_SHORT).show()
+                if (!wasStarred && nowStarred) CallBackReminderPrompt.show(this, num, name)
+            }
+        }.start()
+    }
+
+    /** Same All / Missed / Received / Outgoing filters as the main call log,
+     *  applied to this number's own calls. */
+    private fun applyFilter() {
+        val filtered = when {
+            binding.chipMissed.isChecked -> allDetails.filter {
+                it.type == CallLog.Calls.MISSED_TYPE || it.type == CallLog.Calls.REJECTED_TYPE
+            }
+            binding.chipReceived.isChecked -> allDetails.filter { it.type == CallLog.Calls.INCOMING_TYPE }
+            binding.chipOutgoing.isChecked -> allDetails.filter { it.type == CallLog.Calls.OUTGOING_TYPE }
+            else -> allDetails
+        }
+        val totalSecs = filtered.sumOf { it.duration }
+        val answered = filtered.count { it.duration > 0 }
+        val rows = ArrayList<Row>()
+        // Total talk time leads the list so it scrolls away with the calls.
+        if (totalSecs > 0) rows.add(Row.Total(totalSecs, answered))
+        rows.addAll(buildRows(filtered))
+        adapter.submit(rows)
+    }
+
+    private fun lookupPhoto(num: String): Uri? {
+        if (num.isBlank() ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS)
+            != PackageManager.PERMISSION_GRANTED
+        ) return null
+        val uri = Uri.withAppendedPath(
+            ContactsContract.PhoneLookup.CONTENT_FILTER_URI, Uri.encode(num)
+        )
+        return try {
+            contentResolver.query(
+                uri, arrayOf(ContactsContract.PhoneLookup.PHOTO_URI), null, null, null
+            )?.use { c -> if (c.moveToFirst()) c.getString(0)?.let { Uri.parse(it) } else null }
+        } catch (e: SecurityException) {
+            null
+        }
+    }
+
+    /** Tapping the header (avatar/name/number) opens the matching contact, or
+     *  offers to add one if this number isn't saved yet. */
+    private fun openContact() {
+        if (number.isBlank()) return
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS)
+            != PackageManager.PERMISSION_GRANTED
+        ) return
+        val lookupUri = Uri.withAppendedPath(
+            ContactsContract.PhoneLookup.CONTENT_FILTER_URI, Uri.encode(number)
+        )
+        val contactUri: Uri? = try {
+            contentResolver.query(
+                lookupUri,
+                arrayOf(ContactsContract.PhoneLookup._ID, ContactsContract.PhoneLookup.LOOKUP_KEY),
+                null, null, null
+            )?.use { c ->
+                if (c.moveToFirst())
+                    ContactsContract.Contacts.getLookupUri(c.getLong(0), c.getString(1))
+                else null
+            }
+        } catch (e: Exception) {
+            null
+        }
+        if (contactUri != null) {
+            try {
+                startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, contactUri))
+            } catch (_: Exception) {
+            }
+        } else {
+            try {
+                startActivity(
+                    android.content.Intent(ContactsContract.Intents.Insert.ACTION).apply {
+                        type = ContactsContract.RawContacts.CONTENT_TYPE
+                        putExtra(ContactsContract.Intents.Insert.PHONE, number)
+                    }
+                )
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    private fun callNumber() {
+        if (number.isBlank()) return
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CALL_PHONE)
+            == PackageManager.PERMISSION_GRANTED
+        ) placeCall() else callPermLauncher.launch(Manifest.permission.CALL_PHONE)
+    }
+
+    private fun placeCall() {
+        Dialer.place(this, Dialer.normalize(this, number))
+    }
+
+    // --- Overflow menu ---------------------------------------------------------
+
+    private fun showMenu(anchor: View) {
+        if (number.isBlank()) return
+        androidx.appcompat.widget.PopupMenu(this, anchor).apply {
+            if (isStarred) menu.add(0, 0, 0, R.string.notes)
+            menu.add(0, 1, 1, R.string.log_copy)
+            menu.add(0, 2, 2, R.string.opt_edit)
+            menu.add(0, 3, 3, R.string.block_number)
+            menu.add(0, 4, 4, R.string.history_delete)
+            setOnMenuItemClickListener {
+                when (it.itemId) {
+                    0 -> { editNotes(); true }
+                    1 -> { copyNumber(); true }
+                    2 -> { editBeforeCall(); true }
+                    3 -> { blockNumber(); true }
+                    4 -> { deleteHistory(); true }
+                    else -> false
+                }
+            }
+            show()
+        }
+    }
+
+    private fun editNotes() {
+        val ctx = applicationContext
+        val num = number
+        Thread {
+            val current = StarredStore.notesFor(ctx, num)
+            runOnUiThread { showNotesDialog(current) }
+        }.start()
+    }
+
+    private fun showNotesDialog(current: String) {
+        val field = android.widget.EditText(this).apply {
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or
+                android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
+            setText(current)
+            hint = getString(R.string.notes_hint)
+            minLines = 3
+        }
+        val pad = (20 * resources.displayMetrics.density).toInt()
+        field.setPadding(pad, pad / 2, pad, pad / 2)
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle(R.string.notes)
+            .setView(field)
+            .setPositiveButton(R.string.notes_save) { _, _ ->
+                val text = field.text?.toString().orEmpty()
+                val ctx = applicationContext
+                val num = number
+                Thread { StarredStore.updateNotes(ctx, num, text) }.start()
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    private fun copyNumber() {
+        val cm = getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        cm.setPrimaryClip(android.content.ClipData.newPlainText("number", number))
+        android.widget.Toast.makeText(this, R.string.copied, android.widget.Toast.LENGTH_SHORT).show()
+    }
+
+    /** Open the dialer with this number pre-entered so it can be edited before calling. */
+    private fun editBeforeCall() {
+        startActivity(
+            android.content.Intent(this, HomeActivity::class.java)
+                .setAction(android.content.Intent.ACTION_DIAL)
+                .setData(Uri.fromParts("tel", number, null))
+        )
+    }
+
+    private fun blockNumber() {
+        val ctx = applicationContext
+        val n = number
+        Thread {
+            BlockedNumbers.add(ctx, n)
+            runOnUiThread {
+                android.widget.Toast.makeText(this, R.string.number_blocked, android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }.start()
+    }
+
+    private fun deleteHistory() {
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setMessage(R.string.history_delete_confirm)
+            .setPositiveButton(R.string.log_delete) { _, _ -> doDeleteHistory() }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    private fun doDeleteHistory() {
+        val ctx = applicationContext
+        val num = number
+        Thread {
+            CallLogRepository.delete(ctx, num)
+            runOnUiThread {
+                android.widget.Toast.makeText(this, R.string.entry_deleted, android.widget.Toast.LENGTH_SHORT).show()
+                finish()
+            }
+        }.start()
+    }
+
+    // --- Rows / grouping -------------------------------------------------------
+
+    private sealed class Row {
+        data class Total(val totalSecs: Long, val count: Int) : Row()
+        data class Header(val label: String) : Row()
+        data class Item(val detail: CallDetail) : Row()
+    }
+
+    private fun buildRows(details: List<CallDetail>): List<Row> {
+        val rows = ArrayList<Row>()
+        var lastLabel: String? = null
+        for (d in details) {
+            val label = dayLabel(d.date)
+            if (label != lastLabel) { rows.add(Row.Header(label)); lastLabel = label }
+            rows.add(Row.Item(d))
+        }
+        return rows
+    }
+
+    private fun dayLabel(date: Long): String {
+        val diff = ((midnight(System.currentTimeMillis()) - midnight(date)) /
+            DateUtils.DAY_IN_MILLIS).toInt()
+        return when {
+            diff <= 0 -> getString(R.string.recents_today)
+            diff == 1 -> getString(R.string.recents_yesterday)
+            diff in 2..6 -> DateUtils.formatDateTime(this, date, DateUtils.FORMAT_SHOW_WEEKDAY)
+            else -> DateUtils.formatDateTime(
+                this, date, DateUtils.FORMAT_SHOW_DATE or DateUtils.FORMAT_ABBREV_MONTH
+            )
+        }
+    }
+
+    private fun midnight(t: Long): Long {
+        val c = Calendar.getInstance()
+        c.timeInMillis = t
+        c.set(Calendar.HOUR_OF_DAY, 0); c.set(Calendar.MINUTE, 0)
+        c.set(Calendar.SECOND, 0); c.set(Calendar.MILLISECOND, 0)
+        return c.timeInMillis
+    }
+
+    private inner class HistoryAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
+        private val rows = ArrayList<Row>()
+
+        fun submit(list: List<Row>) { rows.clear(); rows.addAll(list); notifyDataSetChanged() }
+
+        override fun getItemViewType(position: Int) = when (rows[position]) {
+            is Row.Total -> 2
+            is Row.Header -> 0
+            is Row.Item -> 1
+        }
+
+        override fun getItemCount() = rows.size
+
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
+            val inflater = LayoutInflater.from(parent.context)
+            return when (viewType) {
+                2 -> TotalVH(inflater.inflate(R.layout.item_call_history_total, parent, false))
+                0 -> HeaderVH(inflater.inflate(R.layout.item_call_log_header, parent, false))
+                else -> ItemVH(inflater.inflate(R.layout.item_call_history, parent, false))
+            }
+        }
+
+        override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
+            when (val row = rows[position]) {
+                is Row.Total -> (holder as TotalVH).bind(row.totalSecs, row.count)
+                is Row.Header -> (holder as HeaderVH).label.text = row.label
+                is Row.Item -> {
+                    val first = position == 0 || rows[position - 1] !is Row.Item
+                    val last = position == rows.size - 1 || rows[position + 1] !is Row.Item
+                    (holder as ItemVH).bind(row.detail, first, last)
+                }
+            }
+        }
+
+        inner class TotalVH(view: View) : RecyclerView.ViewHolder(view) {
+            private val duration: TextView = view.findViewById(R.id.totalDuration)
+            private val count: TextView = view.findViewById(R.id.totalCount)
+            fun bind(totalSecs: Long, calls: Int) {
+                duration.text = totalSecs.asTalkTime()
+                count.text = itemView.resources.getQuantityString(
+                    R.plurals.stats_calls, calls, calls
+                )
+            }
+        }
+
+        inner class HeaderVH(view: View) : RecyclerView.ViewHolder(view) {
+            val label: TextView = view as TextView
+        }
+
+        inner class ItemVH(view: View) : RecyclerView.ViewHolder(view) {
+            private val typeIcon: ImageView = view.findViewById(R.id.typeIcon)
+            private val title: TextView = view.findViewById(R.id.title)
+            private val time: TextView = view.findViewById(R.id.time)
+            private val duration: TextView = view.findViewById(R.id.duration)
+
+            fun bind(d: CallDetail, firstInGroup: Boolean, lastInGroup: Boolean) {
+                val ctx = title.context
+                val missed = d.type == CallLog.Calls.MISSED_TYPE || d.type == CallLog.Calls.REJECTED_TYPE
+                val red = ContextCompat.getColor(ctx, R.color.missed_red)
+                val onSurface = ctx.themeColor(com.google.android.material.R.attr.colorOnSurface)
+
+                itemView.setBackgroundResource(
+                    when {
+                        firstInGroup && lastInGroup -> R.drawable.bg_log_group_single
+                        firstInGroup -> R.drawable.bg_log_group_top
+                        lastInGroup -> R.drawable.bg_log_group_bottom
+                        else -> R.drawable.bg_log_group_middle
+                    }
+                )
+
+                title.text = getString(
+                    when (d.type) {
+                        CallLog.Calls.OUTGOING_TYPE -> R.string.hist_outgoing
+                        CallLog.Calls.REJECTED_TYPE -> R.string.hist_declined
+                        CallLog.Calls.MISSED_TYPE -> R.string.hist_missed
+                        else -> R.string.hist_incoming
+                    }
+                )
+                title.setTextColor(if (missed) red else onSurface)
+                typeIcon.setImageResource(
+                    when (d.type) {
+                        CallLog.Calls.OUTGOING_TYPE -> R.drawable.ic_call_made
+                        CallLog.Calls.MISSED_TYPE, CallLog.Calls.REJECTED_TYPE -> R.drawable.ic_call_missed
+                        else -> R.drawable.ic_call_received
+                    }
+                )
+                // Match the recents list: outgoing green, missed red, incoming blue.
+                val arrowColor = when (d.type) {
+                    CallLog.Calls.OUTGOING_TYPE -> ContextCompat.getColor(ctx, R.color.call_arrow_outgoing)
+                    CallLog.Calls.MISSED_TYPE, CallLog.Calls.REJECTED_TYPE -> red
+                    else -> ContextCompat.getColor(ctx, R.color.call_arrow_incoming)
+                }
+                typeIcon.imageTintList = ColorStateList.valueOf(arrowColor)
+                time.text = DateUtils.formatDateTime(ctx, d.date, DateUtils.FORMAT_SHOW_TIME)
+                val s = d.duration
+                duration.text = when {
+                    missed -> ""
+                    s < 60 -> "${s}s"
+                    s < 3600 -> "${s / 60} min ${s % 60} s"
+                    else -> "${s / 3600}h ${(s % 3600) / 60}m ${s % 60}s"
+                }
+            }
+        }
+    }
+
+    companion object {
+        const val EXTRA_NUMBER = "number"
+        const val EXTRA_NAME = "name"
+    }
+}

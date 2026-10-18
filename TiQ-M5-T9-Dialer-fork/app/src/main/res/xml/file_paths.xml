@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Downloaded update APKs, shared with the system package installer. -->
+    <cache-path name="updates" path="updates/" />
+    <!-- Voicemail audio exported for the system share sheet. -->
+    <cache-path name="voicemail_share" path="voicemail_share/" />
+</paths>

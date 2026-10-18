@@ -1,0 +1,125 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="?attr/colorSurfaceContainer"
+    android:orientation="vertical">
+
+    <!-- No hamburger/search bar here - that's shared chrome hosted by
+         HomeActivity (see activity_home.xml) so it never blinks switching
+         from/to Recents. -->
+
+    <!-- Not-yet-activated (or activation failed): explanation + action chips,
+         centered in the middle of the screen. -->
+    <LinearLayout
+        android:id="@+id/activateState"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:paddingHorizontal="32dp"
+        android:visibility="gone"
+        tools:visibility="visible">
+
+        <ImageView
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_marginBottom="12dp"
+            android:src="@drawable/ic_voicemail"
+            app:tint="?attr/colorOnSurfaceVariant" />
+
+        <TextView
+            android:id="@+id/status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:textColor="?attr/colorOnSurfaceVariant"
+            android:textSize="14sp"
+            tools:text="Download voicemails from your carrier and play them here" />
+
+        <LinearLayout
+            android:id="@+id/activateChips"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:gravity="center"
+            android:orientation="horizontal">
+
+            <com.google.android.material.chip.Chip
+                android:id="@+id/chipActivate"
+                style="@style/Widget.Material3.Chip.Filter"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:checkable="false"
+                app:checkedIconVisible="false"
+                tools:text="@string/vvm_activate" />
+
+            <com.google.android.material.chip.Chip
+                android:id="@+id/chipCallVoicemail"
+                style="@style/Widget.Material3.Chip.Filter"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:checkable="false"
+                app:checkedIconVisible="false"
+                android:text="@string/vvm_call_voicemail" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- Activated: list only. Syncs automatically (carrier SYNC push, and on
+         opening this tab); pull-to-refresh (below) triggers the same sync
+         on demand. -->
+    <LinearLayout
+        android:id="@+id/listState"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:orientation="vertical"
+        android:visibility="gone"
+        tools:visibility="visible">
+
+        <!-- Multi-select action bar lives in HomeActivity's shared top slot
+             (see activity_home.xml selectionBar), replacing the search bar
+             there instead of stacking a second bar below it. -->
+
+        <FrameLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1">
+
+            <!-- SwipeRefreshLayout needs the RecyclerView as its direct child
+                 to correctly detect whether the list is scrolled to the top
+                 (canChildScrollUp) - nesting another layout in between would
+                 make it always think the list is at the top, letting the
+                 refresh gesture fire from anywhere instead of just the top. -->
+            <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+                android:id="@+id/swipeRefresh"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent">
+
+                <androidx.recyclerview.widget.RecyclerView
+                    android:id="@+id/voicemailList"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:clipToPadding="false"
+                    android:paddingHorizontal="4dp"
+                    android:paddingTop="4dp"
+                    android:paddingBottom="72dp" />
+            </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
+
+            <TextView
+                android:id="@+id/emptyText"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center"
+                android:text="@string/vvm_empty"
+                android:textColor="?attr/colorOnSurfaceVariant"
+                android:visibility="gone"
+                tools:visibility="visible" />
+        </FrameLayout>
+    </LinearLayout>
+
+</LinearLayout>

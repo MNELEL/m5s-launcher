@@ -1,0 +1,316 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.drawerlayout.widget.DrawerLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/drawerLayout"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <!-- Host content: a swappable fragment container with the persistent bottom bar
+         and the on-screen keypad overlaying its bottom. -->
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="?attr/colorSurface"
+        android:fitsSystemWindows="true">
+
+        <!-- Search bar + fragment container: one persistent column so switching
+             between Recents and Voicemail never re-creates or blinks the search
+             bar - only the content below it swaps. Hidden (searchBarCard) while
+             on the Dialer tab. Background matches the fragments' own root
+             background so the search bar card floats on one seamless surface
+             all the way to the top, instead of a different-colored strip
+             showing through around it. -->
+        <LinearLayout
+            android:id="@+id/searchColumn"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="?attr/colorSurfaceContainer"
+            android:orientation="vertical"
+            android:focusable="true"
+            android:focusableInTouchMode="true">
+
+            <!-- Search bar with hamburger menu (persistent across Recents/Voicemail) -->
+            <com.google.android.material.card.MaterialCardView
+                android:id="@+id/searchBarCard"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginHorizontal="12dp"
+                android:layout_marginTop="10dp"
+                android:layout_marginBottom="6dp"
+                app:cardBackgroundColor="?attr/colorSurfaceContainerLowest"
+                app:cardCornerRadius="28dp"
+                app:cardElevation="0dp"
+                app:strokeWidth="0dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="56dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:paddingStart="8dp"
+                    android:paddingEnd="6dp">
+
+                    <ImageView
+                        android:id="@+id/btnMenu"
+                        android:layout_width="40dp"
+                        android:layout_height="40dp"
+                        android:background="?attr/selectableItemBackgroundBorderless"
+                        android:clickable="true"
+                        android:focusable="false"
+                        android:contentDescription="@string/nav_settings"
+                        android:padding="8dp"
+                        android:src="@drawable/ic_menu"
+                        app:tint="?attr/colorOnSurfaceVariant" />
+
+                    <EditText
+                        android:id="@+id/searchInput"
+                        android:layout_width="0dp"
+                        android:layout_height="match_parent"
+                        android:layout_weight="1"
+                        android:background="@null"
+                        android:hint="@string/search_hint"
+                        android:imeOptions="actionSearch"
+                        android:inputType="textPersonName"
+                        android:maxLines="1"
+                        android:textSize="16sp"
+                        android:importantForAutofill="no" />
+
+                    <ImageView
+                        android:id="@+id/btnVoiceSearch"
+                        android:layout_width="40dp"
+                        android:layout_height="40dp"
+                        android:background="?attr/selectableItemBackgroundBorderless"
+                        android:clickable="true"
+                        android:focusable="false"
+                        android:contentDescription="@string/voice_search"
+                        android:padding="8dp"
+                        android:src="@drawable/ic_mic"
+                        app:tint="?attr/colorOnSurfaceVariant" />
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+            <!-- Contextual selection bar: replaces the search bar card in the
+                 exact same top slot during multi-select (long-press a
+                 voicemail), matching the real Google Dialer's own voicemail
+                 multi-select action bar exactly - an edge-to-edge Material
+                 toolbar (not the rounded search pill), just Close / "N
+                 selected" / Delete. Google's own strings
+                 (voicemailMultiSelectActionBarTitle="%1$s selected") confirm
+                 there's no separate "select all" in their voicemail list, so
+                 this doesn't have one either. Shown/hidden via HomeActivity's
+                 showSelectionBar()/hideSelectionBar(); VoicemailFragment wires
+                 its own delete/close actions in through those calls. -->
+            <LinearLayout
+                android:id="@+id/selectionBar"
+                android:layout_width="match_parent"
+                android:layout_height="56dp"
+                android:background="?attr/colorSurface"
+                android:elevation="2dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingHorizontal="4dp"
+                android:visibility="gone"
+                tools:visibility="visible">
+
+                <ImageView
+                    android:id="@+id/selectionClose"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:padding="12dp"
+                    android:src="@drawable/ic_close"
+                    android:contentDescription="@string/cancel"
+                    app:tint="?attr/colorOnSurface" />
+
+                <TextView
+                    android:id="@+id/selectionCount"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_marginStart="12dp"
+                    android:textColor="?attr/colorOnSurface"
+                    android:textSize="20sp"
+                    tools:text="1 selected" />
+
+                <ImageView
+                    android:id="@+id/selectionDelete"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:padding="12dp"
+                    android:src="@drawable/ic_delete"
+                    android:contentDescription="@string/vvm_delete"
+                    app:tint="?attr/colorOnSurface" />
+            </LinearLayout>
+
+            <FrameLayout
+                android:id="@+id/fragmentContainer"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1" />
+        </LinearLayout>
+
+        <!-- Bottom stack: the on-screen keypad (when visible) sits above the nav bar. -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom"
+            android:orientation="vertical">
+
+        <!-- On-screen dial pad (OSK). Always above the nav bar when shown. -->
+        <LinearLayout
+            android:id="@+id/dialpadPanel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="?attr/colorSurfaceContainerHigh"
+            android:orientation="vertical"
+            android:paddingBottom="6dp"
+            android:visibility="gone"
+            tools:visibility="visible">
+
+            <ImageView
+                android:id="@+id/btnMinimize"
+                android:layout_width="48dp"
+                android:layout_height="26dp"
+                android:layout_gravity="center_horizontal"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:clickable="true"
+                android:focusable="true"
+                android:contentDescription="@string/hide_keypad"
+                android:scaleType="fitCenter"
+                android:src="@drawable/ic_arrow_drop_down"
+                app:tint="?attr/colorOnSurfaceVariant" />
+
+            <LinearLayout style="@style/DialPadRow">
+                <LinearLayout android:id="@+id/key1" style="@style/DialPadKey">
+                    <TextView style="@style/DialPadDigit" android:text="1" />
+                    <TextView style="@style/DialPadLetters" android:text="" />
+                </LinearLayout>
+                <LinearLayout android:id="@+id/key2" style="@style/DialPadKey">
+                    <TextView style="@style/DialPadDigit" android:text="2" />
+                    <TextView style="@style/DialPadLetters" android:text="ABC" />
+                </LinearLayout>
+                <LinearLayout android:id="@+id/key3" style="@style/DialPadKey">
+                    <TextView style="@style/DialPadDigit" android:text="3" />
+                    <TextView style="@style/DialPadLetters" android:text="DEF" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <LinearLayout style="@style/DialPadRow">
+                <LinearLayout android:id="@+id/key4" style="@style/DialPadKey">
+                    <TextView style="@style/DialPadDigit" android:text="4" />
+                    <TextView style="@style/DialPadLetters" android:text="GHI" />
+                </LinearLayout>
+                <LinearLayout android:id="@+id/key5" style="@style/DialPadKey">
+                    <TextView style="@style/DialPadDigit" android:text="5" />
+                    <TextView style="@style/DialPadLetters" android:text="JKL" />
+                </LinearLayout>
+                <LinearLayout android:id="@+id/key6" style="@style/DialPadKey">
+                    <TextView style="@style/DialPadDigit" android:text="6" />
+                    <TextView style="@style/DialPadLetters" android:text="MNO" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <LinearLayout style="@style/DialPadRow">
+                <LinearLayout android:id="@+id/key7" style="@style/DialPadKey">
+                    <TextView style="@style/DialPadDigit" android:text="7" />
+                    <TextView style="@style/DialPadLetters" android:text="PQRS" />
+                </LinearLayout>
+                <LinearLayout android:id="@+id/key8" style="@style/DialPadKey">
+                    <TextView style="@style/DialPadDigit" android:text="8" />
+                    <TextView style="@style/DialPadLetters" android:text="TUV" />
+                </LinearLayout>
+                <LinearLayout android:id="@+id/key9" style="@style/DialPadKey">
+                    <TextView style="@style/DialPadDigit" android:text="9" />
+                    <TextView style="@style/DialPadLetters" android:text="WXYZ" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <LinearLayout style="@style/DialPadRow">
+                <LinearLayout android:id="@+id/keyStar" style="@style/DialPadKey">
+                    <TextView style="@style/DialPadDigit" android:text="*" />
+                    <TextView style="@style/DialPadLetters" android:text="" />
+                </LinearLayout>
+                <LinearLayout android:id="@+id/key0" style="@style/DialPadKey">
+                    <TextView style="@style/DialPadDigit" android:text="0" />
+                    <TextView style="@style/DialPadLetters" android:text="+" />
+                </LinearLayout>
+                <LinearLayout android:id="@+id/keyHash" style="@style/DialPadKey">
+                    <TextView style="@style/DialPadDigit" android:text="#" />
+                    <TextView style="@style/DialPadLetters" android:text="" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <ImageView
+                android:id="@+id/btnDialBig"
+                android:layout_width="150dp"
+                android:layout_height="56dp"
+                android:layout_gravity="center_horizontal"
+                android:layout_marginTop="10dp"
+                android:layout_marginBottom="4dp"
+                android:background="@drawable/bg_dial_pill"
+                android:clickable="true"
+                android:focusable="true"
+                android:contentDescription="@string/ctl_answer"
+                android:padding="15dp"
+                android:scaleType="fitCenter"
+                android:src="@drawable/ic_call"
+                android:visibility="gone"
+                app:tint="#FFFFFF"
+                tools:visibility="visible" />
+        </LinearLayout>
+
+        <!-- The ONE persistent Material 3 NavigationBar (animated tonal indicator). -->
+        <com.google.android.material.bottomnavigation.BottomNavigationView
+            android:id="@+id/bottomNav"
+            style="@style/Widget.Material3.BottomNavigationView"
+            android:layout_width="match_parent"
+            android:layout_height="64dp"
+            android:background="@drawable/bg_bottom_nav"
+            android:elevation="10dp"
+            app:itemPaddingTop="6dp"
+            app:itemPaddingBottom="8dp"
+            app:labelVisibilityMode="labeled"
+            app:menu="@menu/bottom_nav_menu" />
+
+        </LinearLayout><!-- end bottom stack -->
+    </FrameLayout>
+
+    <!-- Drawer content: the NavigationView's menu scrolls in its own space above a
+         real reserved-height footer row, instead of the version text floating as
+         an overlay on top of the menu (which could cover the last item once the
+         menu has enough entries to overflow the screen). -->
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="match_parent"
+        android:layout_gravity="start"
+        android:orientation="vertical"
+        android:background="@drawable/bg_drawer"
+        android:fitsSystemWindows="true">
+
+        <com.google.android.material.navigation.NavigationView
+            android:id="@+id/navView"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            app:headerLayout="@layout/drawer_header"
+            app:menu="@menu/drawer_menu"
+            app:itemVerticalPadding="4dp"
+            app:itemShapeInsetTop="0dp"
+            app:itemShapeInsetBottom="0dp" />
+
+        <TextView
+            android:id="@+id/drawerVersion"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:paddingHorizontal="24dp"
+            android:paddingVertical="20dp"
+            android:textColor="?attr/colorOnSurfaceVariant"
+            android:textSize="13sp"
+            tools:text="PureTech Dialer Version 1.3.3 Beta" />
+
+    </LinearLayout>
+
+</androidx.drawerlayout.widget.DrawerLayout>

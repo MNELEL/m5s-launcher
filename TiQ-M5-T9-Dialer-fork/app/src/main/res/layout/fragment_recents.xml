@@ -1,0 +1,221 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="?attr/colorSurfaceContainer"
+    android:orientation="vertical"
+    android:focusable="true"
+    android:focusableInTouchMode="true">
+
+    <!-- No hamburger/search bar here - that's shared chrome hosted by
+         HomeActivity (see activity_home.xml) so it never blinks switching
+         from/to Voicemail. -->
+
+    <androidx.coordinatorlayout.widget.CoordinatorLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <!-- Chips + favorites: collapse away as the list scrolls -->
+        <com.google.android.material.appbar.AppBarLayout
+            android:id="@+id/appBar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="?attr/colorSurfaceContainer"
+            android:stateListAnimator="@null"
+            app:elevation="0dp"
+            app:liftOnScroll="false">
+
+            <LinearLayout
+                android:id="@+id/collapseHeader"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                app:layout_scrollFlags="scroll">
+
+                <HorizontalScrollView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:focusable="false"
+                    android:scrollbars="none">
+
+                    <com.google.android.material.chip.ChipGroup
+                        android:id="@+id/filterChips"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:focusable="false"
+                        android:paddingHorizontal="12dp"
+                        app:singleLine="true"
+                        app:singleSelection="true"
+                        app:selectionRequired="true">
+
+                        <com.google.android.material.chip.Chip
+                            android:id="@+id/chipAll"
+                            style="@style/Widget.Material3.Chip.Filter"
+                            app:checkedIconVisible="false"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:checked="true"
+                            android:focusable="false"
+                            android:text="@string/filter_all" />
+
+                        <com.google.android.material.chip.Chip
+                            android:id="@+id/chipMissed"
+                            style="@style/Widget.Material3.Chip.Filter"
+                            app:checkedIconVisible="false"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:focusable="false"
+                            android:text="@string/filter_missed" />
+
+                        <com.google.android.material.chip.Chip
+                            android:id="@+id/chipReceived"
+                            style="@style/Widget.Material3.Chip.Filter"
+                            app:checkedIconVisible="false"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:focusable="false"
+                            android:text="@string/filter_received" />
+
+                        <com.google.android.material.chip.Chip
+                            android:id="@+id/chipOutgoing"
+                            style="@style/Widget.Material3.Chip.Filter"
+                            app:checkedIconVisible="false"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:focusable="false"
+                            android:text="@string/filter_outgoing" />
+
+                        <com.google.android.material.chip.Chip
+                            android:id="@+id/chipContacts"
+                            style="@style/Widget.Material3.Chip.Filter"
+                            app:checkedIconVisible="false"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:focusable="false"
+                            android:text="@string/filter_contacts" />
+                    </com.google.android.material.chip.ChipGroup>
+                </HorizontalScrollView>
+
+                <!-- Favorites ▾  +  View contacts -->
+                <LinearLayout
+                    android:id="@+id/favoritesRow"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:paddingHorizontal="20dp"
+                    android:paddingTop="2dp"
+                    android:paddingBottom="0dp">
+
+                    <TextView
+                        android:id="@+id/favoritesToggle"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:clickable="true"
+                        android:focusable="false"
+                        android:drawableEnd="@drawable/ic_arrow_drop_down"
+                        android:drawablePadding="2dp"
+                        android:gravity="center_vertical"
+                        android:text="@string/favorites"
+                        android:textColor="?attr/colorOnSurface"
+                        android:textSize="14sp"
+                        app:drawableTint="?attr/colorOnSurface" />
+
+                    <Space
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/viewContacts"
+                        style="@style/Widget.Material3.Button.TonalButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:minHeight="36dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:paddingVertical="4dp"
+                        android:focusable="false"
+                        android:text="@string/view_contacts" />
+                </LinearLayout>
+
+                <androidx.recyclerview.widget.RecyclerView
+                    android:id="@+id/favoritesStrip"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:paddingHorizontal="12dp"
+                    android:paddingBottom="4dp"
+                    android:layoutAnimation="@anim/fav_layout"
+                    android:visibility="gone"
+                    tools:visibility="visible" />
+            </LinearLayout>
+        </com.google.android.material.appbar.AppBarLayout>
+
+        <FrameLayout
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            app:layout_behavior="@string/appbar_scrolling_view_behavior">
+
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/recents"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:clipToPadding="false"
+                android:paddingBottom="72dp"
+                android:scrollbars="none" />
+
+            <TextView
+                android:id="@+id/emptyText"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center"
+                android:text="@string/no_recents"
+                android:textColor="?attr/colorOnSurfaceVariant"
+                android:visibility="gone"
+                tools:visibility="visible" />
+
+            <!-- Date fast-scroller: fastScrollTrack is the full-height touch
+                 target (drag anywhere on it), fastScrollThumb is the visible
+                 pill that tracks scroll position, fastScrollBubble shows the
+                 date being scrolled to while dragging. Pinned to the literal
+                 right edge (not layout_gravity="end") since a vertical
+                 scrollbar shouldn't flip sides in RTL layouts (e.g. Hebrew).
+                 Kept to 24dp so it never overlaps item_call_log.xml's callBtn
+                 (which sits 28dp in from this same edge: 12dp card margin +
+                 16dp row end-padding). -->
+            <View
+                android:id="@+id/fastScrollTrack"
+                android:layout_width="24dp"
+                android:layout_height="match_parent"
+                android:layout_gravity="right" />
+
+            <View
+                android:id="@+id/fastScrollThumb"
+                android:layout_width="6dp"
+                android:layout_height="48dp"
+                android:layout_gravity="right|top"
+                android:layout_marginEnd="2dp"
+                android:background="@drawable/fastscroll_thumb"
+                android:alpha="0.55" />
+
+            <TextView
+                android:id="@+id/fastScrollBubble"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="right|top"
+                android:layout_marginEnd="34dp"
+                android:background="@drawable/bg_scrub_bubble"
+                android:paddingHorizontal="16dp"
+                android:paddingVertical="8dp"
+                android:textColor="?attr/colorOnPrimary"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                android:visibility="gone"
+                tools:text="Wednesday, July 4, 2026"
+                tools:visibility="visible" />
+        </FrameLayout>
+    </androidx.coordinatorlayout.widget.CoordinatorLayout>
+</LinearLayout>

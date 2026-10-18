@@ -1,0 +1,1272 @@
+package com.puretech.dialer
+
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.provider.ContactsContract
+import android.telecom.Call
+import android.telecom.CallAudioState
+import android.telephony.PhoneNumberUtils
+import android.text.InputType
+import android.util.TypedValue
+import android.view.KeyEvent
+import android.view.View
+import android.view.ViewGroup
+import android.widget.EditText
+import android.widget.ImageView
+import android.widget.TextView
+import android.widget.Toast
+import androidx.activity.OnBackPressedCallback
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AppCompatActivity
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import androidx.core.content.ContextCompat
+import com.puretech.dialer.databinding.ActivityIncallBinding
+
+/**
+ * The in-call screen. Single + multi-call (hold/swap/merge/add) and call
+ * waiting. Active controls collapse to Mute / Route / Keypad / More, with the
+ * rest (record, add, hold, merge) in the More overflow. A proximity wake lock
+ * blanks the screen at the ear during earpiece calls.
+ */
+class InCallActivity : AppCompatActivity(), CallManager.Listener {
+
+    private lateinit var binding: ActivityIncallBinding
+    private val audioManager by lazy { getSystemService(android.media.AudioManager::class.java) }
+
+    private val preview by lazy { intent.getBooleanExtra(EXTRA_PREVIEW, false) }
+    private val previewIncoming by lazy { intent.getBooleanExtra(EXTRA_PREVIEW_INCOMING, false) }
+    private val isPreview get() = preview || previewIncoming
+
+    private val handler = Handler(Looper.getMainLooper())
+    private var timing = false
+    // Fallback call-start clock for devices whose telecom returns connectTimeMillis == 0.
+    private var activeSinceRealtime = 0L
+    private val dtmfBuffer = StringBuilder()
+    // True once any call reached ACTIVE, so we can tell a real hang-up from a
+    // call that never connected (e.g. no service).
+    private var everConnected = false
+    // While showing "Server unreachable", hold the screen open for 2s before it closes.
+    private var errorFinishPending = false
+
+    private val recordPermLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted -> if (granted) startRecording() else toast(getString(R.string.rec_denied)) }
+
+    // BLUETOOTH_CONNECT is a dangerous, runtime-only permission on API 31+ (it is
+    // NOT part of the dialer role's auto-granted set, despite living in the
+    // manifest as a plain <uses-permission>). Without it, BluetoothDevice.getName()/
+    // getAlias() throw and we silently fall back to the generic "Bluetooth" label
+    // for every device. Request it proactively so real headset/car-kit names are
+    // ready by the time the route popup opens.
+    private val bluetoothPermLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { bindControlStates() }
+
+    private val ticker = object : Runnable {
+        override fun run() {
+            updateDuration()
+            handler.postDelayed(this, 1000)
+        }
+    }
+
+    private var holdTiming = false
+    private val holdTicker = object : Runnable {
+        override fun run() {
+            updateRemoteHoldBanner()
+            handler.postDelayed(this, 1000)
+        }
+    }
+
+    private var sleepTiming = false
+    private val sleepTimerTicker = object : Runnable {
+        override fun run() {
+            updateSleepTimerBanner()
+            handler.postDelayed(this, 1000)
+        }
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        binding = ActivityIncallBinding.inflate(layoutInflater)
+        setContentView(binding.root)
+
+        setShowWhenLocked(true)
+        setTurnScreenOn(true)
+
+        // Back never lets the user navigate into our own dialer/call-log screens
+        // while a call is live — it just backgrounds the whole task (call keeps
+        // running via the notification), revealing whatever was really in the
+        // foreground before the call (or the launcher, if the call was placed
+        // from our own app). InCallActivity shares a task with HomeActivity
+        // (same implicit taskAffinity), so default Back would otherwise pop
+        // into it instead.
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (moreOptionsOpen) collapseMoreOptions() else moveTaskToBack(true)
+            }
+        })
+
+        binding.btnEnd.setOnClickListener { CallManager.hangup() }
+        binding.swipeIncoming.onAnswer = { CallManager.answer() }
+        binding.swipeIncoming.onDecline = { CallManager.reject() }
+        binding.btnMute.setOnClickListener { toggleMute() }
+        binding.btnRoute.setOnClickListener { onRouteClick() }
+        // The first control is the in-call keypad (DTMF for hotline menus).
+        binding.btnKeypad.setOnClickListener { toggleDtmf() }
+        binding.btnMore.setOnClickListener { toggleMoreOptions() }
+        binding.sleepTimerBanner.setOnClickListener {
+            SleepTimer.cancel(this)
+            updateSleepTimerBanner()
+        }
+        binding.btnIncomingMessage.setOnClickListener { showReplyOptions(CallManager.ringingCall()) }
+
+        binding.secondaryStrip.setOnClickListener { CallManager.swap() }
+        binding.btnWaitDecline.setOnClickListener { CallManager.reject(CallManager.waitingCall()) }
+        binding.btnWaitHold.setOnClickListener { CallManager.answerAndHold() }
+        binding.btnWaitEnd.setOnClickListener { CallManager.answerAndEnd() }
+        binding.btnWaitMessage.setOnClickListener { showReplyOptions(CallManager.waitingCall()) }
+
+        setupDtmfPad()
+        binding.btnDtmfCollapse.setOnClickListener { toggleDtmf() }
+        // Vibrant green echo waves for incoming calls (matches the Answer button).
+        binding.pulseRing.setRingColor(0xFF00C853.toInt())
+
+        applyScreenProfile()
+        // Keeps the More overlay's position correct across any future resize
+        // of bottomPanel (e.g. a screen-profile change), not just at the
+        // moment it's opened.
+        binding.bottomPanel.addOnLayoutChangeListener { _, _, top, _, bottom, _, oldTop, _, oldBottom ->
+            if (bottom - top != oldBottom - oldTop) syncMoreOptionsMargin()
+        }
+        if (isPreview) renderPreview()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        if (!isPreview) {
+            CallManager.registerListener(this)
+            requestBluetoothPermIfNeeded()
+        }
+    }
+
+    /** See [bluetoothPermLauncher]. No-op below API 31 (BLUETOOTH_CONNECT isn't
+     *  a runtime permission there) or once already granted. */
+    private fun requestBluetoothPermIfNeeded() {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.S) return
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            bluetoothPermLauncher.launch(Manifest.permission.BLUETOOTH_CONNECT)
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        applyScreenProfile()
+        if (!isPreview) {
+            CallManager.uiVisible = true
+            // Full-screen call UI is up → remove any notification entirely. It is
+            // re-posted from onStop only if we get backgrounded.
+            CallNotifier.cancel(this)
+            // Reflect a sleep timer that was started/fired while this Activity
+            // didn't exist (recreated after being backgrounded) immediately,
+            // instead of waiting up to 1s for the ticker.
+            updateSleepTimerBanner()
+        }
+    }
+
+    override fun onStop() {
+        super.onStop()
+        if (!isPreview) {
+            CallManager.unregisterListener(this)
+            // Left the call screen → bring the (ongoing) notification back.
+            CallManager.uiVisible = false
+            if (CallManager.call != null) CallNotifier.update(this)
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        stopTimer()
+        stopHoldTimer()
+        stopSleepTimerTicker()
+        // NOTE: do not stop recording here — the framework keeps recording with the
+        // call and stops on its own when the call ends.
+    }
+
+    // --- Hardware keys ---------------------------------------------------------
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        if (keyCode == KeyEvent.KEYCODE_CALL) {
+            CallManager.ringingCall()?.let { CallManager.answer(it) }
+            return true
+        }
+        if (keyCode == KeyEvent.KEYCODE_BACK && moreOptionsOpen) {
+            collapseMoreOptions()
+            return true
+        }
+        if (keyCode == KeyEvent.KEYCODE_BACK && binding.dtmfOverlay.visibility == View.VISIBLE) {
+            toggleDtmf()
+            return true
+        }
+        // On these keypad phones (no volume rocker) the D-pad up/down adjusts the
+        // in-call volume. Only active here — i.e. only on the call screen — and it
+        // keeps working with the screen blanked by the proximity sensor, since the
+        // proximity wake lock keeps input flowing to this activity. We pick the
+        // stream that matches the current audio route so it also works on speaker
+        // (same voice-call stream) and on Bluetooth (separate SCO volume).
+        if (!isPreview && (keyCode == KeyEvent.KEYCODE_DPAD_UP || keyCode == KeyEvent.KEYCODE_DPAD_DOWN)) {
+            val dir = if (keyCode == KeyEvent.KEYCODE_DPAD_UP)
+                android.media.AudioManager.ADJUST_RAISE else android.media.AudioManager.ADJUST_LOWER
+            // Earpiece/speaker share the voice-call stream; Bluetooth uses the SCO
+            // stream (value 6, hidden in the SDK) so the headset volume changes too.
+            val stream = if (CallManager.currentRoute() == CallAudioState.ROUTE_BLUETOOTH) 6
+            else android.media.AudioManager.STREAM_VOICE_CALL
+            try {
+                audioManager?.adjustStreamVolume(stream, dir, android.media.AudioManager.FLAG_SHOW_UI)
+            } catch (_: Exception) {
+            }
+            return true
+        }
+        val dtmf = when (keyCode) {
+            in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9 -> ('0' + (keyCode - KeyEvent.KEYCODE_0))
+            KeyEvent.KEYCODE_STAR -> '*'
+            KeyEvent.KEYCODE_POUND -> '#'
+            else -> null
+        }
+        if (dtmf != null) {
+            onDtmf(dtmf)
+            return true
+        }
+        return super.onKeyDown(keyCode, event)
+    }
+
+    // --- State machine ---------------------------------------------------------
+
+    override fun onCallChanged() {
+        val ringing = CallManager.ringingCall()
+        val active = CallManager.activeCall()
+        val held = CallManager.heldCall()
+        val waiting = CallManager.waitingCall()
+
+        // A 2nd (waiting) call takes over the screen like a normal incoming call, so
+        // it drives the big caller display; the ongoing call is shown small below.
+        val headerCall = if (waiting != null) waiting else CallManager.primaryCall()
+        if (headerCall == null && !isPreview) {
+            // If we're showing "Server unreachable", let the 2s timer close us.
+            if (!errorFinishPending) finishAndStopRecording()
+            return
+        }
+        headerCall?.let { bindIdentity(it) }
+        headerCall?.let { updateStatusFor(it) }
+        binding.hdIcon.visibility =
+            if (headerCall != null && CallManager.isHighDef(headerCall)) View.VISIBLE else View.GONE
+        @Suppress("DEPRECATION")
+        binding.wifiIcon.visibility =
+            if (headerCall?.details?.hasProperty(Call.Details.PROPERTY_WIFI) == true)
+                View.VISIBLE else View.GONE
+
+        // Both branches below hide bottomPanel, which is what the More panel
+        // positions itself against and is left open the same way toggleDtmf()
+        // guards against -- close it first so a call answered/declined while
+        // it was open doesn't leave it floating over the next ringing/waiting
+        // screen as if it belonged there.
+        if ((waiting != null || ringing != null) && moreOptionsOpen) collapseMoreOptions()
+
+        when {
+            waiting != null -> {
+                // Full-screen incoming look: the big header already shows the waiting
+                // caller, so hide the redundant line, pulse the avatar, and show the
+                // ongoing call small in the secondary strip (not tappable here).
+                show(binding.waitingPanel)
+                hide(binding.bottomPanel, binding.incomingControls, binding.swipeIncomingPanel,
+                    binding.btnIncomingMessage)
+                binding.waitingText.visibility = View.GONE
+                val ongoing = active ?: held
+                if (ongoing != null) {
+                    binding.secondaryStrip.visibility = View.VISIBLE
+                    binding.secondaryStrip.isClickable = false
+                    val status = if (ongoing == held) getString(R.string.on_hold)
+                    else getString(R.string.on_call_ongoing)
+                    binding.secondaryText.text = "${nameFor(ongoing)} • $status"
+                } else {
+                    binding.secondaryStrip.visibility = View.GONE
+                }
+                binding.pulseRing.start()
+            }
+            ringing != null -> {
+                showIncomingControls()
+                show(binding.btnIncomingMessage)
+                hide(binding.bottomPanel,
+                    binding.waitingPanel, binding.secondaryStrip)
+                // Echo waves radiating from the avatar while the phone rings.
+                binding.pulseRing.start()
+            }
+            else -> {
+                // Keep the panel hidden while the in-call keypad is open.
+                binding.bottomPanel.visibility =
+                    if (binding.dtmfOverlay.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+                hide(binding.incomingControls, binding.swipeIncomingPanel,
+                    binding.btnIncomingMessage, binding.waitingPanel)
+                binding.pulseRing.stop()
+                bindControlStates()
+                bindSecondaryStrip(held)
+            }
+        }
+        // Keep the REC indicator in sync (e.g. if the framework rejects recording).
+        updateRecordIndicator()
+
+        updateRemoteHoldBanner()
+        updateSleepTimerBanner()
+    }
+
+    /** Remote hold chip: visible only when the other party has held this call.
+     *  Shows "[Name] has placed you on hold · MM:SS" with its own running timer —
+     *  the regular statusText keeps counting the overall call duration untouched. */
+    private fun updateRemoteHoldBanner() {
+        val remoteHold = CallManager.isRemoteHold()
+        binding.remoteHoldBanner.visibility = if (remoteHold) View.VISIBLE else View.GONE
+        if (remoteHold) {
+            // Remote hold keeps the call at STATE_ACTIVE (no STATE_HOLDING transition),
+            // so heldCall() won't find it — fall back to the active call for the name.
+            val other = CallManager.heldCall() ?: CallManager.activeCall()
+            val name = other?.let { nameFor(it) } ?: ""
+            val base = if (name.isNotBlank())
+                getString(R.string.remote_hold_named, name)
+            else
+                getString(R.string.remote_hold_unknown)
+            val elapsed = formatHoldDuration()
+            binding.remoteHoldText.text = if (elapsed.isNotEmpty()) "$base · $elapsed" else base
+            startHoldTimer()
+        } else {
+            stopHoldTimer()
+        }
+    }
+
+    /** Sleep-timer chip: visible while an auto-hangup countdown is running.
+     *  Tap to cancel it -- re-arming is one tap away in the overflow menu. */
+    private fun updateSleepTimerBanner() {
+        val running = SleepTimer.isRunning(this)
+        binding.sleepTimerBanner.visibility = if (running) View.VISIBLE else View.GONE
+        if (running) {
+            binding.sleepTimerText.text =
+                getString(R.string.sleep_timer_banner, formatSleepTimerRemaining())
+            startSleepTimerTicker()
+        } else {
+            stopSleepTimerTicker()
+        }
+    }
+
+    /** Show either the slide-to-answer control or the round Answer/Decline
+     *  buttons for an incoming call, depending on the user's setting. */
+    private fun showIncomingControls() {
+        if (Prefs.incomingCallGesture(this) == Prefs.GESTURE_SWIPE) {
+            binding.swipeIncoming.reset()
+            show(binding.swipeIncomingPanel)
+            hide(binding.incomingControls)
+        } else {
+            applyAnswerButtonSide()
+            show(binding.incomingControls)
+            hide(binding.swipeIncomingPanel)
+        }
+    }
+
+    /** Wires the round incoming-call buttons' icon/background/action to match
+     *  Settings -> Answer button side. btnAnswer/btnDecline are just the two
+     *  physical slots (left/right); which one behaves as Answer vs Decline is
+     *  assigned here each time, so no view reordering is needed and a
+     *  mid-session setting change takes effect on the next incoming call. */
+    private fun applyAnswerButtonSide() {
+        val answerOnRight = Prefs.answerButtonSide(this) == Prefs.ANSWER_SIDE_RIGHT
+        val answerSlot = if (answerOnRight) binding.btnDecline else binding.btnAnswer
+        val declineSlot = if (answerOnRight) binding.btnAnswer else binding.btnDecline
+        answerSlot.setImageResource(R.drawable.ic_call)
+        answerSlot.setBackgroundResource(R.drawable.bg_circle_answer)
+        answerSlot.contentDescription = getString(R.string.ctl_answer)
+        answerSlot.setOnClickListener { CallManager.answer() }
+        declineSlot.setImageResource(R.drawable.ic_call_end)
+        declineSlot.setBackgroundResource(R.drawable.bg_circle_end)
+        declineSlot.contentDescription = getString(R.string.ctl_decline)
+        declineSlot.setOnClickListener { CallManager.reject() }
+    }
+
+    private fun bindSecondaryStrip(held: Call?) {
+        if (held != null) {
+            binding.secondaryStrip.visibility = View.VISIBLE
+            binding.secondaryStrip.isClickable = true   // tap to swap (re-enabled after call-waiting)
+            binding.secondaryText.text = "${nameFor(held)} • ${getString(R.string.on_hold)}"
+        } else {
+            binding.secondaryStrip.visibility = View.GONE
+        }
+    }
+
+    // --- More / route popups ---------------------------------------------------
+
+    // --- More options panel -----------------------------------------------------
+    //
+    // Replaces the old small CardMenu popup: tapping More instead expands a
+    // second row, styled to match the bottom row's own icons (just smaller, to
+    // fit them all in one row without scrolling). moreOptionsPanel is a true
+    // overlay: a direct child of the root FrameLayout (see activity_incall.xml),
+    // positioned flush above bottomPanel via a bottomMargin kept in sync with
+    // bottomPanel's actual height (syncMoreOptionsMargin). Expanding it is a
+    // real height animation, 0 -> its natural content height, so it visibly
+    // grows -- but because it lives in the FrameLayout overlay branch, not
+    // inside bottomPanel or the content LinearLayout, that growth never
+    // resizes anything else: it just covers the avatar/middle area behind it
+    // while open instead of pushing it up.
+
+    private var moreOptionsOpen = false
+    private var moreOptionsAnimator: android.animation.ValueAnimator? = null
+
+    private data class MoreItem(val id: Int, val iconRes: Int, val label: String)
+
+    /** Keeps moreOptionsPanel's bottom margin equal to bottomPanel's actual
+     *  height, so it always rests exactly flush above it -- covering the
+     *  avatar/middle area, never overlapping bottomPanel itself. Re-synced on
+     *  every layout pass (screen-profile changes resize bottomPanel's icons). */
+    private fun syncMoreOptionsMargin() {
+        val margin = binding.bottomPanel.height
+        val lp = binding.moreOptionsPanel.layoutParams as? ViewGroup.MarginLayoutParams ?: return
+        if (lp.bottomMargin != margin) {
+            lp.bottomMargin = margin
+            binding.moreOptionsPanel.layoutParams = lp
+        }
+    }
+
+    private fun toggleMoreOptions() {
+        if (moreOptionsOpen) collapseMoreOptions() else expandMoreOptions()
+    }
+
+    private fun expandMoreOptions() {
+        if (moreOptionsOpen) return
+        moreOptionsOpen = true
+        setActive(binding.btnMore, true)
+        populateMoreOptionsRow()
+        syncMoreOptionsMargin()
+
+        // bottomPanel's own rounded top corners would otherwise peek through
+        // as a gap at both edges right where moreOptionsPanel sits flush
+        // above it -- square them off for the duration so the two read as
+        // one continuous card (restored in collapseMoreOptions once it's
+        // fully closed).
+        binding.bottomPanel.setBackgroundResource(R.drawable.bg_call_panel_flat)
+
+        val panel = binding.moreOptionsPanel
+        moreOptionsAnimator?.cancel()
+        panel.visibility = View.VISIBLE
+        // Measure the row's natural (wrap_content) height with its
+        // freshly-built children before animating to it, since it's currently
+        // pinned at 0dp.
+        panel.measure(
+            View.MeasureSpec.makeMeasureSpec(binding.root.width, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
+        )
+        animateHeight(panel, panel.height, panel.measuredHeight, android.view.animation.DecelerateInterpolator()) {}
+    }
+
+    private fun collapseMoreOptions() {
+        if (!moreOptionsOpen) return
+        moreOptionsOpen = false
+        setActive(binding.btnMore, false)
+
+        val panel = binding.moreOptionsPanel
+        moreOptionsAnimator?.cancel()
+        animateHeight(panel, panel.height, 0, android.view.animation.AccelerateInterpolator()) {
+            panel.visibility = View.GONE
+            binding.bottomPanel.setBackgroundResource(R.drawable.bg_call_panel)
+        }
+    }
+
+    private fun animateHeight(view: View, from: Int, to: Int, interpolator: android.view.animation.Interpolator, onEnd: () -> Unit) {
+        val animator = android.animation.ValueAnimator.ofInt(from, to)
+        animator.addUpdateListener {
+            view.layoutParams.height = it.animatedValue as Int
+            view.requestLayout()
+        }
+        animator.duration = 220
+        animator.interpolator = interpolator
+        animator.addListener(object : android.animation.AnimatorListenerAdapter() {
+            override fun onAnimationEnd(animation: android.animation.Animator) = onEnd()
+        })
+        moreOptionsAnimator = animator
+        animator.start()
+    }
+
+    private fun buildMoreItems(): List<MoreItem> {
+        val items = ArrayList<MoreItem>()
+        if (CallManager.number().isNotBlank()) {
+            items.add(MoreItem(MENU_MESSAGE, R.drawable.ic_message, getString(R.string.log_message)))
+        }
+        items.add(
+            MoreItem(
+                MENU_RECORD,
+                if (CallManager.recording) R.drawable.ic_mic_off else R.drawable.ic_record,
+                getString(if (CallManager.recording) R.string.ctl_stop_record else R.string.ctl_record)
+            )
+        )
+        items.add(MoreItem(MENU_ADD, R.drawable.ic_add_call, getString(R.string.ctl_add)))
+        // Two calls → Swap; a single locally-held call → Resume; active → Hold.
+        // When the remote party is holding us, we can't act on hold state — omit the item.
+        if (!CallManager.isRemoteHold()) {
+            val (holdIcon, holdLabel) = when {
+                CallManager.activeCall() != null && CallManager.heldCall() != null ->
+                    R.drawable.ic_swap to R.string.ctl_swap
+                CallManager.heldCall() != null -> R.drawable.ic_play to R.string.ctl_resume
+                else -> R.drawable.ic_hold to R.string.ctl_hold
+            }
+            items.add(MoreItem(MENU_HOLD, holdIcon, getString(holdLabel)))
+        }
+        if (CallManager.activeCall() != null && CallManager.heldCall() != null) {
+            items.add(MoreItem(MENU_MERGE, R.drawable.ic_merge, getString(R.string.ctl_merge)))
+        }
+        // In a conference, let the user manage / drop individual participants.
+        if (CallManager.conferenceChildren().size > 1) {
+            items.add(MoreItem(MENU_MANAGE_CONF, R.drawable.ic_merge, getString(R.string.ctl_manage_conference)))
+        }
+        val sleepLabel = if (SleepTimer.isRunning(this))
+            getString(R.string.ctl_sleep_timer_running, formatSleepTimerRemaining())
+        else getString(R.string.ctl_sleep_timer)
+        items.add(MoreItem(MENU_SLEEP_TIMER, R.drawable.ic_sleep_timer, sleepLabel))
+        // Earpiece calls already blank the screen automatically via the proximity
+        // sensor (ProximityController) -- this manual control only earns its
+        // place for Speaker/Bluetooth/wired-headset calls, where nothing turns
+        // the screen off and it would otherwise just stay lit for the whole call.
+        if (CallManager.currentRoute() != CallAudioState.ROUTE_EARPIECE) {
+            items.add(MoreItem(MENU_SCREEN_OFF, R.drawable.ic_screen_off, getString(R.string.ctl_screen_off)))
+        }
+        return items
+    }
+
+    private fun performMoreAction(id: Int) {
+        when (id) {
+            MENU_MESSAGE -> messageNumber(CallManager.number())
+            MENU_RECORD -> toggleRecord()
+            MENU_ADD -> addCall()
+            MENU_HOLD -> toggleHoldOrSwap()
+            MENU_MERGE -> CallManager.merge()
+            MENU_MANAGE_CONF -> showManageConference()
+            MENU_SLEEP_TIMER -> showSleepTimerDialog()
+            MENU_SCREEN_OFF -> screenOff()
+        }
+    }
+
+    /** Manually blanks the screen during a non-earpiece call, using the same
+     *  reliable GLOBAL_ACTION_LOCK_SCREEN call [ProximityController]'s latch
+     *  mode uses -- independent of whether that optional proximity feature is
+     *  turned on. Needs the same one-time Accessibility permission; prompts
+     *  for it the first time instead of silently doing nothing. */
+    private fun screenOff() {
+        if (ProximityAccessibilityService.isEnabled(this)) {
+            ProximityAccessibilityService.lockScreen()
+        } else {
+            sleepDialogBuilder()
+                .setTitle(R.string.screen_off_permission_title)
+                .setMessage(R.string.screen_off_permission_message)
+                .setPositiveButton(R.string.proximity_lock_open_accessibility) { _, _ ->
+                    ProximityAccessibilityService.openSettings(this)
+                }
+                .setNegativeButton(R.string.cancel, null)
+                .show()
+        }
+    }
+
+    private fun populateMoreOptionsRow() {
+        val row = binding.moreOptionsPanel
+        row.removeAllViews()
+        for (item in buildMoreItems()) {
+            val cell = layoutInflater.inflate(R.layout.item_incall_more_option, row, false)
+            val icon = cell.findViewById<android.widget.ImageView>(R.id.moreOptionIcon)
+            icon.setImageResource(item.iconRes)
+            cell.findViewById<android.widget.TextView>(R.id.moreOptionLabel).text = item.label
+            // Listener goes on the icon itself, not the wrapping cell: the icon
+            // is the clickable one (ControlIconSmall inherits ControlIcon's
+            // clickable=true + ripple background), same as every bottom-row
+            // button (btnKeypad, btnMute...) -- attaching it to the cell instead
+            // left the icon silently swallowing every tap with nothing wired to
+            // it, which is why nothing in this row did anything.
+            icon.setOnClickListener {
+                performMoreAction(item.id)
+                collapseMoreOptions()
+            }
+            row.addView(cell)
+        }
+    }
+
+    /** List the conference participants; tap the end button to drop one. */
+    private fun showManageConference() {
+        val sheet = com.google.android.material.bottomsheet.BottomSheetDialog(this)
+        val container = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            val pad = (12 * resources.displayMetrics.density).toInt()
+            setPadding(0, pad, 0, pad)
+        }
+        val title = android.widget.TextView(this).apply {
+            text = getString(R.string.ctl_manage_conference)
+            textSize = 18f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            val p = (20 * resources.displayMetrics.density).toInt()
+            setPadding(p, p / 2, p, p / 2)
+        }
+        container.addView(title)
+
+        fun rebuild() {
+            // Drop everything after the title and re-list current participants.
+            while (container.childCount > 1) container.removeViewAt(1)
+            val kids = CallManager.conferenceChildren()
+            if (kids.size <= 1) { sheet.dismiss(); return }
+            for (child in kids) {
+                val row = layoutInflater.inflate(R.layout.item_conference_party, container, false)
+                row.findViewById<android.widget.TextView>(R.id.partyName).text = nameFor(child)
+                row.findViewById<View>(R.id.partyEnd).setOnClickListener {
+                    CallManager.disconnectParticipant(child)
+                    row.postDelayed({ rebuild() }, 300)
+                }
+                container.addView(row)
+            }
+        }
+        rebuild()
+        sheet.setContentView(container)
+        sheet.show()
+    }
+
+    /** Pick a duration (or turn it off) for the auto-hangup sleep timer -- e.g.
+     *  listening to a hotline in bed without draining the phone overnight. */
+    private fun showSleepTimerDialog() {
+        // -1 is the sentinel "Custom…" entry, always last in sleep_timer_options.
+        val minutesOptions = intArrayOf(30, 60, 90, 120, -1)
+        val labels = resources.getStringArray(R.array.sleep_timer_options)
+        val savedMinutes = Prefs.sleepTimerMinutes(this)
+        var selected = minutesOptions.indexOf(savedMinutes).let { if (it < 0) minutesOptions.size - 1 else it }
+        val builder = sleepDialogBuilder()
+            .setTitle(R.string.sleep_timer_title)
+            .setSingleChoiceItems(labels, selected) { _, which -> selected = which }
+            .setPositiveButton(R.string.ctl_sleep_timer_start) { _, _ ->
+                val minutes = minutesOptions[selected]
+                if (minutes == -1) {
+                    showCustomSleepTimerDialog(if (savedMinutes in minutesOptions) 30 else savedMinutes)
+                } else {
+                    Prefs.setSleepTimerMinutes(this, minutes)
+                    SleepTimer.start(applicationContext, minutes)
+                    updateSleepTimerBanner()
+                }
+            }
+            .setNegativeButton(R.string.cancel, null)
+        if (SleepTimer.isRunning(this)) {
+            builder.setNeutralButton(R.string.ctl_sleep_timer_off) { _, _ ->
+                SleepTimer.cancel(this)
+                updateSleepTimerBanner()
+            }
+        }
+        builder.show()
+    }
+
+    /** Custom minute count, entered in a card-styled numeric field. */
+    private fun showCustomSleepTimerDialog(prefill: Int) {
+        val density = resources.displayMetrics.density
+        val pad = (20 * density).toInt()
+
+        val input = android.widget.EditText(this).apply {
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER
+            setText(prefill.toString())
+            setSelection(text.length)
+            hint = getString(R.string.sleep_timer_custom_hint)
+        }
+        val card = com.google.android.material.card.MaterialCardView(this).apply {
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            radius = 24 * density
+            cardElevation = 0f
+            setCardBackgroundColor(themeColor(com.google.android.material.R.attr.colorSurfaceContainerLowest))
+            strokeWidth = 0
+            addView(android.widget.LinearLayout(this@InCallActivity).apply {
+                orientation = android.widget.LinearLayout.VERTICAL
+                setPadding(pad, pad, pad, pad)
+                addView(android.widget.TextView(this@InCallActivity).apply {
+                    text = getString(R.string.sleep_timer_custom_hint)
+                    setTextColor(themeColor(com.google.android.material.R.attr.colorOnSurfaceVariant))
+                    textSize = 13f
+                })
+                addView(input)
+            })
+        }
+        val container = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(pad, pad / 2, pad, pad / 2)
+            addView(card)
+        }
+
+        sleepDialogBuilder()
+            .setTitle(R.string.sleep_timer_custom_title)
+            .setView(container)
+            .setPositiveButton(R.string.ctl_sleep_timer_start) { _, _ ->
+                val minutes = input.text?.toString()?.trim()?.toIntOrNull()
+                if (minutes == null || minutes !in 1..600) {
+                    Toast.makeText(this, R.string.sleep_timer_custom_invalid, Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+                Prefs.setSleepTimerMinutes(this, minutes)
+                SleepTimer.start(applicationContext, minutes)
+                updateSleepTimerBanner()
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    /** M3 rounded corners + pill-shaped action buttons, matching the call-back
+     *  reminder flow's dialog styling. */
+    private fun sleepDialogBuilder() =
+        MaterialAlertDialogBuilder(this, R.style.ThemeOverlay_M5Dialer_RoundedDialog)
+
+    private fun formatSleepTimerRemaining(): String {
+        val total = (SleepTimer.remainingMs(this) / 1000).coerceAtLeast(0)
+        return String.format("%02d:%02d", total / 60, total % 60)
+    }
+
+    private fun onRouteClick() {
+        if (CallManager.isBluetoothAvailable()) {
+            showRouteMenu(binding.btnRoute)
+        } else {
+            CallManager.setSpeaker(!CallManager.isSpeakerOn())
+            bindControlStates()
+        }
+    }
+
+    private fun showRouteMenu(anchor: View) {
+        val mask = CallManager.supportedRouteMask()
+        val current = CallManager.currentRoute()
+        val btDevices = CallManager.bluetoothDevices()
+        val activeBt = CallManager.activeBluetoothDevice()
+        val menu = CardMenu(this, anchor)
+        if (mask and CallAudioState.ROUTE_EARPIECE != 0)
+            menu.add(
+                CallAudioState.ROUTE_EARPIECE, R.drawable.ic_call_outline,
+                getString(R.string.route_earpiece), current == CallAudioState.ROUTE_EARPIECE
+            )
+        if (mask and CallAudioState.ROUTE_SPEAKER != 0)
+            menu.add(
+                CallAudioState.ROUTE_SPEAKER, R.drawable.ic_speaker,
+                getString(R.string.route_speaker), current == CallAudioState.ROUTE_SPEAKER
+            )
+        if (mask and CallAudioState.ROUTE_BLUETOOTH != 0) {
+            if (btDevices.size > 1) {
+                // More than one Bluetooth audio device connected at once (e.g. a
+                // car kit and earbuds) -- list each individually instead of one
+                // generic "Bluetooth" row, so the user can move the call from
+                // one to the other without disconnecting either.
+                btDevices.forEachIndexed { index, device ->
+                    val selected = current == CallAudioState.ROUTE_BLUETOOTH && device == activeBt
+                    menu.add(
+                        BT_DEVICE_ID_BASE + index, R.drawable.ic_bluetooth,
+                        CallManager.bluetoothDeviceName(device) ?: getString(R.string.route_bluetooth),
+                        selected
+                    )
+                }
+            } else {
+                menu.add(
+                    CallAudioState.ROUTE_BLUETOOTH, R.drawable.ic_bluetooth,
+                    CallManager.bluetoothDeviceName() ?: getString(R.string.route_bluetooth),
+                    current == CallAudioState.ROUTE_BLUETOOTH
+                )
+            }
+        }
+        menu.onClick { id ->
+            if (id >= BT_DEVICE_ID_BASE) {
+                btDevices.getOrNull(id - BT_DEVICE_ID_BASE)?.let { CallManager.requestBluetoothDevice(it) }
+            } else {
+                CallManager.setRoute(id)
+            }
+            bindControlStates()
+        }
+        menu.show()
+    }
+
+    private fun toggleHoldOrSwap() {
+        if (CallManager.hasHeldCall()) CallManager.swap() else CallManager.hold()
+    }
+
+    private fun addCall() {
+        startActivity(
+            Intent(this, HomeActivity::class.java)
+                .putExtra(HomeActivity.EXTRA_START_TAB, HomeActivity.TAB_DIALER)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+    }
+
+    // --- Reply with message ----------------------------------------------------
+
+    /** Opens SMS compose to [number] directly -- for messaging the person
+     *  you're already on a call with, from the More menu. */
+    private fun messageNumber(number: String) {
+        if (number.isBlank()) return
+        try {
+            startActivity(Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:${Uri.encode(number)}")))
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun showReplyOptions(target: Call?) {
+        val call = target ?: return
+        val responses = Prefs.quickResponses(this).toTypedArray()
+        val items = (responses.toList() + getString(R.string.reply_custom)).toTypedArray()
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.reply_title)
+            .setIcon(R.drawable.ic_message)
+            .setItems(items) { _, which ->
+                if (which < responses.size) CallManager.rejectWithMessage(responses[which], call)
+                else showCustomReply(call)
+            }
+            .show()
+    }
+
+    private fun showCustomReply(call: Call) {
+        val input = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+            setHint(R.string.reply_title)
+        }
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.reply_custom)
+            .setView(input)
+            .setPositiveButton(R.string.reply_send) { _, _ ->
+                val text = input.text.toString().trim()
+                if (text.isNotEmpty()) CallManager.rejectWithMessage(text, call)
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    // --- Identity --------------------------------------------------------------
+
+    private fun bindIdentity(call: Call) {
+        // A conference shows a single "Conference call" identity with the head count.
+        if (CallManager.isConference()) {
+            val n = CallManager.conferenceChildren().size
+            binding.nameText.text = getString(R.string.conference_call)
+            binding.numberText.text =
+                if (n > 0) resources.getQuantityString(R.plurals.conference_people, n, n) else ""
+            binding.numberText.visibility = if (n > 0) View.VISIBLE else View.GONE
+            Avatars.bind(binding.avatarInitial, binding.contactPhoto, null, null)
+            return
+        }
+        val number = CallManager.number(call)
+        val pretty = prettyNumber(number)
+        val (name, photo) = lookupContact(number)
+        val sim = call.details.accountHandle
+            ?.takeIf { CallingAccounts.isMultiSim(this) }
+            ?.let { CallingAccounts.label(this, it) }
+        if (name != null) {
+            binding.nameText.text = name
+            binding.numberText.text = if (sim != null) "$pretty • $sim" else pretty
+            binding.numberText.visibility = View.VISIBLE
+        } else {
+            binding.nameText.text = pretty.ifBlank { getString(R.string.app_name) }
+            binding.numberText.text = sim ?: ""
+            binding.numberText.visibility = if (sim != null) View.VISIBLE else View.GONE
+        }
+        // Big colored-initial circle (or photo / grey person), like the call log.
+        Avatars.bind(binding.avatarInitial, binding.contactPhoto, name, photo)
+    }
+
+    private fun nameFor(call: Call): String {
+        val number = CallManager.number(call)
+        return lookupContact(number).first ?: number.ifBlank { getString(R.string.app_name) }
+    }
+
+    /** Show the number clearly with dashes, e.g. 845-351-1200 or +1 845-351-1200. */
+    private fun prettyNumber(number: String): String {
+        if (number.isBlank()) return number
+        // Leave MMI/USSD codes untouched.
+        if (number.any { it == '*' || it == '#' }) return number
+        val digits = number.filter { it.isDigit() }
+        return when {
+            digits.length == 10 ->
+                "${digits.substring(0, 3)}-${digits.substring(3, 6)}-${digits.substring(6)}"
+            digits.length == 11 && digits.startsWith("1") ->
+                "+1 ${digits.substring(1, 4)}-${digits.substring(4, 7)}-${digits.substring(7)}"
+            else -> PhoneNumberUtils.formatNumber(number, java.util.Locale.US.country) ?: number
+        }
+    }
+
+    private fun lookupContact(number: String): Pair<String?, Uri?> {
+        if (number.isBlank()) return null to null
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS)
+            != PackageManager.PERMISSION_GRANTED
+        ) return null to null
+        val uri = Uri.withAppendedPath(
+            ContactsContract.PhoneLookup.CONTENT_FILTER_URI, Uri.encode(number)
+        )
+        return try {
+            contentResolver.query(
+                uri,
+                arrayOf(
+                    ContactsContract.PhoneLookup.DISPLAY_NAME,
+                    ContactsContract.PhoneLookup.PHOTO_URI
+                ),
+                null, null, null
+            )?.use { c ->
+                if (c.moveToFirst()) {
+                    NameFormat.apply(this, c.getString(0)) to (c.getString(1)?.let { Uri.parse(it) })
+                } else null to null
+            } ?: (null to null)
+        } catch (e: SecurityException) {
+            null to null
+        }
+    }
+
+    // --- Audio / record controls ----------------------------------------------
+
+    private fun toggleMute() {
+        CallManager.setMuted(!CallManager.isMuted())
+        bindControlStates()
+    }
+
+    private fun toggleDtmf() {
+        val show = binding.dtmfOverlay.visibility != View.VISIBLE
+        // The keypad hides bottomPanel entirely (below), which is what the More
+        // panel positions itself against -- close it first so it's never left
+        // open against a since-hidden reference.
+        if (show && moreOptionsOpen) collapseMoreOptions()
+        binding.dtmfOverlay.visibility = if (show) View.VISIBLE else View.GONE
+        binding.avatar.visibility = if (show) View.GONE else View.VISIBLE
+        // Hide the whole bottom panel (controls + End) so the keypad can run to the
+        // bottom edge. Close it with the collapse chevron to get the End button back.
+        binding.bottomPanel.visibility = if (show) View.GONE else View.VISIBLE
+        setActive(binding.btnKeypad, show)
+    }
+
+    private fun bindControlStates() {
+        val muted = CallManager.isMuted()
+        binding.btnMute.setImageResource(if (muted) R.drawable.ic_mic_off else R.drawable.ic_mic)
+        setActive(binding.btnMute, muted)
+        binding.lblMute.text = getString(if (muted) R.string.ctl_unmute else R.string.ctl_mute)
+        // Keypad button reflects whether the DTMF pad is open.
+        setActive(binding.btnKeypad, binding.dtmfOverlay.visibility == View.VISIBLE)
+        bindRouteButton()
+    }
+
+    private fun bindRouteButton() {
+        val route = CallManager.currentRoute()
+        if (CallManager.isBluetoothAvailable()) {
+            binding.btnRoute.setImageResource(R.drawable.ic_bluetooth)
+            // Show the headset's actual name when routed to it, else the generic label.
+            binding.lblRoute.text =
+                if (route == CallAudioState.ROUTE_BLUETOOTH)
+                    CallManager.bluetoothDeviceName() ?: getString(R.string.route_bluetooth)
+                else getString(R.string.route_bluetooth)
+            setActive(binding.btnRoute, route == CallAudioState.ROUTE_BLUETOOTH)
+        } else {
+            binding.btnRoute.setImageResource(R.drawable.ic_speaker)
+            binding.lblRoute.setText(R.string.route_speaker)
+            setActive(binding.btnRoute, route == CallAudioState.ROUTE_SPEAKER)
+        }
+    }
+
+    private fun setActive(view: ImageView, active: Boolean) {
+        view.background = ContextCompat.getDrawable(
+            this, if (active) R.drawable.bg_circle_control_active else R.drawable.bg_circle_control
+        )
+        view.imageTintList = android.content.res.ColorStateList.valueOf(
+            ContextCompat.getColor(
+                this,
+                if (active) R.color.incall_control_active_icon else R.color.incall_control_icon
+            )
+        )
+    }
+
+    /** Start/stop call recording from the More menu, updating the red indicator.
+     *  Recording is performed by the telephony framework (both sides). */
+    private fun toggleRecord() {
+        if (CallManager.recording) {
+            CallManager.stopRecording()
+            toast(getString(R.string.rec_saved))
+        } else if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+            == PackageManager.PERMISSION_GRANTED
+        ) {
+            startRecording()
+        } else {
+            recordPermLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+        updateRecordIndicator()
+    }
+
+    private fun startRecording() {
+        val ok = CallManager.startRecording()
+        toast(getString(if (ok) R.string.rec_started else R.string.rec_failed))
+        updateRecordIndicator()
+    }
+
+    /** Show a small blinking red dot at the top-left while recording. */
+    private fun updateRecordIndicator() {
+        val on = CallManager.recording
+        binding.recordIndicator.visibility = if (on) View.VISIBLE else View.GONE
+        if (on) {
+            if (binding.recordIndicator.animation == null) {
+                binding.recordIndicator.startAnimation(
+                    android.view.animation.AlphaAnimation(1f, 0.2f).apply {
+                        duration = 700
+                        repeatMode = android.view.animation.Animation.REVERSE
+                        repeatCount = android.view.animation.Animation.INFINITE
+                    }
+                )
+            }
+        } else {
+            binding.recordIndicator.clearAnimation()
+        }
+    }
+
+    // --- DTMF ------------------------------------------------------------------
+
+    private fun setupDtmfPad() {
+        // Keys are now LinearLayout cells (digit + letters) like the dialer pad, so
+        // walk the rows and wire each cell by the digit in its first TextView.
+        wireDtmfKeys(binding.dtmfPad)
+        // android:ellipsize="start" alone only truncates-with-"…" for END
+        // ellipsis; START/MIDDLE need the view in real single-line/horizontally-
+        // scrolling mode to take effect, otherwise a long digit string just gets
+        // clipped by the view's bounds once it overflows -- digits keep being
+        // appended but silently run off the right edge, invisible. isSingleLine
+        // turns that clipping into the intended left-scrolling "…5678" behavior,
+        // so on a long hotline menu the newest digits pressed stay visible.
+        binding.dtmfDigits.isSingleLine = true
+    }
+
+    /** Scales up the in-call controls when the user's screen profile is
+     *  smartphone-sized (see Prefs.PROFILE_LARGE) — bigger avatar, buttons,
+     *  and text, matching the ~30% ratio HomeActivity.applyBigKeypad() uses. */
+    private fun applyScreenProfile() {
+        val large = Prefs.screenProfile(this) == Prefs.PROFILE_LARGE
+        val d = resources.displayMetrics.density
+        fun px(dp: Int) = (dp * d).toInt()
+        fun sp(v: TextView, s: Float) = v.setTextSize(TypedValue.COMPLEX_UNIT_SP, s)
+
+        binding.avatar.layoutParams = binding.avatar.layoutParams.apply {
+            width = px(if (large) 200 else 150); height = px(if (large) 200 else 150)
+        }
+        listOf(binding.avatarInitial, binding.contactPhoto).forEach {
+            it.layoutParams = it.layoutParams.apply {
+                width = px(if (large) 128 else 96); height = px(if (large) 128 else 96)
+            }
+        }
+        sp(binding.avatarInitial, if (large) 52f else 40f)
+
+        val icons = listOf(
+            binding.btnMute, binding.btnKeypad, binding.btnRoute, binding.btnMore,
+            binding.btnWaitDecline, binding.btnWaitHold, binding.btnWaitEnd
+        )
+        val iconBox = px(if (large) 76 else 56)
+        val iconPad = px(if (large) 20 else 16)
+        for (v in icons) {
+            v.layoutParams = v.layoutParams.apply { width = iconBox; height = iconBox }
+            v.setPadding(iconPad, iconPad, iconPad, iconPad)
+        }
+        listOf(binding.lblMute, binding.lblKeypad, binding.lblRoute, binding.lblMore)
+            .forEach { sp(it, if (large) 15f else 12f) }
+
+        val ansBox = px(if (large) 84 else 64)
+        val ansPad = px(if (large) 22 else 17)
+        listOf(binding.btnAnswer, binding.btnDecline).forEach {
+            it.layoutParams = it.layoutParams.apply { width = ansBox; height = ansBox }
+            it.setPadding(ansPad, ansPad, ansPad, ansPad)
+        }
+
+        binding.btnEnd.layoutParams = binding.btnEnd.layoutParams.apply {
+            width = px(if (large) 190 else 150); height = px(if (large) 72 else 56)
+        }
+        val endPad = px(if (large) 19 else 15)
+        binding.btnEnd.setPadding(endPad, endPad, endPad, endPad)
+
+        sp(binding.nameText, if (large) 32f else 26f)
+        sp(binding.numberText, if (large) 18f else 15f)
+        sp(binding.statusText, if (large) 18f else 15f)
+
+        resizeDtmfKeys(binding.dtmfPad, px(if (large) 60 else 46), if (large) 32f else 26f)
+    }
+
+    /** Same traversal shape as [wireDtmfKeys] — walk the DTMF pad's rows and
+     *  resize each digit cell by the digit in its first TextView. */
+    private fun resizeDtmfKeys(group: ViewGroup, heightPx: Int, digitSp: Float) {
+        for (i in 0 until group.childCount) {
+            val child = group.getChildAt(i) as? ViewGroup ?: continue
+            val digit = child.getChildAt(0) as? TextView
+            val ch = digit?.text?.toString()?.firstOrNull()
+            if (ch != null && (ch.isDigit() || ch == '*' || ch == '#')) {
+                child.layoutParams = child.layoutParams.apply { height = heightPx }
+                digit.setTextSize(TypedValue.COMPLEX_UNIT_SP, digitSp)
+            } else {
+                resizeDtmfKeys(child, heightPx, digitSp)
+            }
+        }
+    }
+
+    private fun wireDtmfKeys(group: android.view.ViewGroup) {
+        for (i in 0 until group.childCount) {
+            val child = group.getChildAt(i) as? android.view.ViewGroup ?: continue
+            val ch = (child.getChildAt(0) as? android.widget.TextView)
+                ?.text?.toString()?.firstOrNull()
+            if (ch != null && (ch.isDigit() || ch == '*' || ch == '#')) {
+                child.setOnClickListener { onDtmf(ch) }
+            } else {
+                wireDtmfKeys(child)   // recurse into the row
+            }
+        }
+    }
+
+    private fun onDtmf(c: Char) {
+        CallManager.playDtmf(c)
+        dtmfBuffer.append(c)
+        binding.dtmfDigits.text = dtmfBuffer.toString()
+        binding.dtmfDigits.visibility = View.VISIBLE
+    }
+
+    // Proximity screen-off is owned by ProximityController for the whole call
+    // (works on any screen, not just here), driven by CallService/CallManager.
+
+    // --- Status / duration -----------------------------------------------------
+
+    @Suppress("DEPRECATION")
+    private fun updateStatusFor(call: Call) {
+        // Note: remote hold does NOT interrupt this — the call stays STATE_ACTIVE the
+        // whole time on this telephony stack, so the duration timer below keeps running
+        // uninterrupted. The remote-hold chip (with its own timer) is driven separately
+        // by updateRemoteHoldBanner()/holdTicker.
+        when (call.state) {
+            Call.STATE_ACTIVE -> {
+                everConnected = true
+                // Start the fallback clock the first moment the call is active.
+                if (activeSinceRealtime == 0L) activeSinceRealtime = android.os.SystemClock.elapsedRealtime()
+                binding.statusText.text = formatDuration(elapsedMs()); startTimer()
+            }
+            Call.STATE_DIALING, Call.STATE_PULLING_CALL -> { stopTimer(); binding.statusText.setText(R.string.state_dialing) }
+            Call.STATE_RINGING -> { stopTimer(); binding.statusText.setText(R.string.state_ringing) }
+            Call.STATE_HOLDING -> { stopTimer(); binding.statusText.setText(R.string.state_holding) }
+            Call.STATE_DISCONNECTED, Call.STATE_DISCONNECTING -> {
+                stopTimer()
+                if (isConnectFailure(call)) {
+                    // Couldn't reach the network: show the reason and hold 2s, then close.
+                    binding.statusText.setText(R.string.state_unreachable)
+                    if (!errorFinishPending) {
+                        errorFinishPending = true
+                        handler.postDelayed({ finishAndStopRecording() }, 2000)
+                    }
+                } else {
+                    binding.statusText.setText(R.string.state_disconnected)
+                }
+            }
+            else -> { stopTimer(); binding.statusText.setText(R.string.state_connecting) }
+        }
+    }
+
+    /** A call that ended with an error before it ever connected — e.g. no service. */
+    @Suppress("DEPRECATION")
+    private fun isConnectFailure(call: Call): Boolean {
+        if (everConnected) return false
+        val code = call.details?.disconnectCause?.code ?: return false
+        return code == android.telecom.DisconnectCause.ERROR ||
+            code == android.telecom.DisconnectCause.BUSY
+    }
+
+    private fun startTimer() {
+        if (!timing) { timing = true; handler.post(ticker) }
+    }
+
+    private fun stopTimer() {
+        timing = false
+        handler.removeCallbacks(ticker)
+    }
+
+    private fun startHoldTimer() {
+        if (!holdTiming) { holdTiming = true; handler.post(holdTicker) }
+    }
+
+    private fun stopHoldTimer() {
+        holdTiming = false
+        handler.removeCallbacks(holdTicker)
+    }
+
+    private fun startSleepTimerTicker() {
+        if (!sleepTiming) { sleepTiming = true; handler.post(sleepTimerTicker) }
+    }
+
+    private fun stopSleepTimerTicker() {
+        sleepTiming = false
+        handler.removeCallbacks(sleepTimerTicker)
+    }
+
+    private fun formatHoldDuration(): String {
+        val startMs = CallManager.remoteHoldStartMs
+        if (startMs == 0L) return ""
+        val total = ((System.currentTimeMillis() - startMs) / 1000).coerceAtLeast(0)
+        return String.format("%02d:%02d", total / 60, total % 60)
+    }
+
+    private fun updateDuration() {
+        binding.statusText.text = formatDuration(elapsedMs())
+    }
+
+    private fun elapsedMs(): Long {
+        val connect = CallManager.activeCall()?.details?.connectTimeMillis ?: 0L
+        if (connect > 0) return System.currentTimeMillis() - connect
+        // Telecom gave us no connect time — use our own clock from when it went active.
+        return if (activeSinceRealtime > 0) android.os.SystemClock.elapsedRealtime() - activeSinceRealtime else 0L
+    }
+
+    private fun formatDuration(ms: Long): String {
+        val total = (ms / 1000).coerceAtLeast(0)
+        return String.format("%02d:%02d", total / 60, total % 60)
+    }
+
+    private fun finishAndStopRecording() {
+        // The framework auto-stops recording when the call ends; nothing to do here.
+        stopTimer()
+        if (!isFinishing) finish()
+    }
+
+    // --- Helpers ---------------------------------------------------------------
+
+    private fun show(vararg views: View) = views.forEach { it.visibility = View.VISIBLE }
+    private fun hide(vararg views: View) = views.forEach { it.visibility = View.GONE }
+    private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+
+    private fun renderPreview() {
+        binding.nameText.text = "Kol Mevaser"
+        binding.numberText.text = "845-351-1200"
+        binding.numberText.visibility = View.VISIBLE
+        Avatars.bind(binding.avatarInitial, binding.contactPhoto, "Kol Mevaser", null)
+        if (previewIncoming) {
+            binding.statusText.setText(R.string.state_ringing)
+            showIncomingControls()
+            show(binding.btnIncomingMessage)
+            hide(binding.bottomPanel, binding.waitingPanel)
+            binding.pulseRing.start()
+        } else {
+            binding.statusText.text = "00:42"
+            binding.hdIcon.visibility = View.VISIBLE
+            hide(binding.incomingControls, binding.swipeIncomingPanel,
+                binding.btnIncomingMessage, binding.waitingPanel)
+        }
+    }
+
+    companion object {
+        const val EXTRA_PREVIEW = "preview"
+        const val EXTRA_PREVIEW_INCOMING = "preview_incoming"
+        private const val MENU_ADD = 102
+        private const val MENU_HOLD = 103
+        private const val MENU_MERGE = 104
+        private const val MENU_RECORD = 105
+        private const val MENU_MANAGE_CONF = 106
+        private const val MENU_SLEEP_TIMER = 107
+        private const val MENU_MESSAGE = 108
+        private const val MENU_SCREEN_OFF = 109
+        // Route-menu ids for individually-listed Bluetooth devices (see
+        // showRouteMenu): offset well above CallAudioState.ROUTE_* (max 8) and
+        // the MENU_* ids above so they can share one CardMenu click handler.
+        private const val BT_DEVICE_ID_BASE = 1000
+    }
+}
