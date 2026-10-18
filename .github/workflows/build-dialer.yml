@@ -25,7 +25,9 @@ jobs:
           java-version: '17'
 
       - name: Build release APK
-        run: ./gradlew assembleRelease
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleRelease
 
       - name: Align and sign with the included keystore
         env:
