@@ -1,16 +1,21 @@
-name: Build signed APK
+name: Build signed dialer APK
 
-# Runs on GitHub's own cloud servers, with full internet access to Google Maven etc.
-# Trigger it manually from the "Actions" tab in your GitHub repo ("Run workflow"),
-# or it runs automatically on every push to main.
+# GitHub Actions only picks up workflow files at the repo root (.github/workflows),
+# so this one lives here and just cd's into the dialer project folder.
 on:
   workflow_dispatch:
   push:
     branches: [main, master]
+    paths:
+      - 'TiQ-M5-T9-Dialer-fork/**'
+      - '.github/workflows/build-dialer.yml'
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: TiQ-M5-T9-Dialer-fork
     steps:
       - uses: actions/checkout@v4
 
@@ -39,4 +44,4 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: M5S-T9-Dialer
-          path: M5S-T9-Dialer.apk
+          path: TiQ-M5-T9-Dialer-fork/M5S-T9-Dialer.apk
