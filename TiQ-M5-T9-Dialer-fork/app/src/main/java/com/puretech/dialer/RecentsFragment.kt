@@ -741,12 +741,7 @@ class RecentsFragment : Fragment() {
 
     private fun addContact(number: String) {
         try {
-            startActivity(
-                Intent(ContactsContract.Intents.Insert.ACTION).apply {
-                    type = ContactsContract.RawContacts.CONTENT_TYPE
-                    putExtra(ContactsContract.Intents.Insert.PHONE, number)
-                }
-            )
+            AddContactActivity.start(requireContext(), number)
         } catch (_: Exception) {
         }
     }
