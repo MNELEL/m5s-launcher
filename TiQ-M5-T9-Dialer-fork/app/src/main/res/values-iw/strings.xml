@@ -300,4 +300,13 @@
     <string name="setting_language_summary">שפת הצגה</string>
     <string name="language_title">שפה</string>
     <string name="language_system">ברירת מחדל של המערכת</string>
+    <string name="add_contact_title">איש קשר חדש</string>
+    <string name="add_contact_number_label">מספר</string>
+    <string name="add_contact_name_label">שם</string>
+    <string name="add_contact_name_hint">הקלד שם…</string>
+    <string name="add_contact_mode_hint"># להחלפה, * מחיקה</string>
+    <string name="add_contact_save">שמירה</string>
+    <string name="add_contact_name_required">יש להקליד שם</string>
+    <string name="add_contact_saved">נשמר</string>
+    <string name="add_contact_failed">השמירה נכשלה</string>
 </resources>
