@@ -19,7 +19,7 @@ import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.puretech.dialer.databinding.ActivityContactsBinding
 
-/** Alphabetical contacts list; tap to call. On a keypad phone, digit keys filter it with T9 (letters of the name or digits of the number). */
+/** Alphabetical contacts list; tap to call. Any key starts typing a real-letter search (same multi-tap keypad as the M5S launcher: # switches Hebrew/English/digits, * deletes). */
 class ContactsActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityContactsBinding
@@ -27,7 +27,7 @@ class ContactsActivity : AppCompatActivity() {
     private lateinit var adapter: SuggestionAdapter
     private var pendingNumber: String? = null
     private var all: List<Contact> = emptyList()
-    private val query = StringBuilder()
+    private val query = T9Buffer()
 
     private val callPermLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -53,30 +53,23 @@ class ContactsActivity : AppCompatActivity() {
         }.start()
     }
 
-    /** Shows the full list, or the T9 matches for the digits typed so far (the title shows what was typed). */
+    /** Shows the full list, or the free-text matches for what's been typed so far (the title shows the query + current mode). */
     private fun refresh() {
-        if (query.isEmpty()) {
+        if (query.text.isEmpty()) {
             adapter.submit(all)
             binding.title.setText(R.string.contacts_title)
         } else {
-            adapter.submit(ContactsRepository.search(query.toString(), all, 200))
-            binding.title.text = query.toString()
+            adapter.submit(ContactsRepository.searchByText(query.text.toString(), all, 200))
+            binding.title.text = query.text.toString() + "   [" + query.modeLabel() + "]"
         }
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
-            val kc = event.keyCode
-            val digit: Char? = when (kc) {
-                in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9 -> '0' + (kc - KeyEvent.KEYCODE_0)
-                in KeyEvent.KEYCODE_NUMPAD_0..KeyEvent.KEYCODE_NUMPAD_9 -> '0' + (kc - KeyEvent.KEYCODE_NUMPAD_0)
-                else -> null
+            if (query.onKeyDown(event.keyCode)) { refresh(); return true }
+            if (event.keyCode == KeyEvent.KEYCODE_BACK && query.text.isNotEmpty()) {
+                query.clear(); refresh(); return true
             }
-            if (digit != null) { query.append(digit); refresh(); return true }
-            if ((kc == KeyEvent.KEYCODE_DEL || kc == KeyEvent.KEYCODE_STAR) && query.isNotEmpty()) {
-                query.setLength(query.length - 1); refresh(); return true
-            }
-            if (kc == KeyEvent.KEYCODE_BACK && query.isNotEmpty()) { query.setLength(0); refresh(); return true }
         }
         return super.dispatchKeyEvent(event)
     }
