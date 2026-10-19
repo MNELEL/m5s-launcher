@@ -396,8 +396,8 @@
     <string name="whats_new_title">מה חדש ב־%1$s</string>
     <string name="whats_new_got_it">הבנתי</string>
     <string name="whats_new_body">• <b>תיקון חיישן קירבה</b> — אופציונלי: מונע מהמסך להידלק ולהגיב לנגיעות בטעות באוזן במהלך שיחה.</string>
-    <string name="duration_sec">%1$d שנ'</string>
-    <string name="duration_min">%1$d דק' %2$d שנ'</string>
+    <string name="duration_sec">%1$d שנ\'</string>
+    <string name="duration_min">%1$d דק\' %2$d שנ\'</string>
     <string name="opt_contact_details">פרטי איש קשר</string>
     <string name="favorite_number_dont_ask_again">אל תשאל שוב</string>
     <string name="stats_filter_lifetime">מאז ומתמיד</string>
@@ -436,7 +436,7 @@
     <string name="percent_format">%1$d%%</string>
     <string name="ctl_screen_off">כיבוי מסך</string>
     <string name="screen_off_permission_title">כיבוי מסך</string>
-    <string name="screen_off_permission_message">כדי לכבות את המסך במהלך שיחה, יש להפעיל 'בקרת מסך' בהגדרות הנגישות.</string>
+    <string name="screen_off_permission_message">כדי לכבות את המסך במהלך שיחה, יש להפעיל \'בקרת מסך\' בהגדרות הנגישות.</string>
     <string name="ctl_sleep_timer">טיימר שינה</string>
     <string name="ctl_sleep_timer_running">טיימר שינה · %1$s</string>
     <string name="ctl_sleep_timer_off">כיבוי</string>
