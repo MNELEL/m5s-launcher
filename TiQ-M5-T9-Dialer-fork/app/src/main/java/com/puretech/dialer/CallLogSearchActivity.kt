@@ -8,14 +8,15 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.ContactsContract
+import android.view.KeyEvent
 import android.view.View
-import android.view.inputmethod.InputMethodManager
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.widget.doAfterTextChanged
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.puretech.dialer.databinding.ActivityCallLogSearchBinding
+import android.widget.Toast
 import java.util.Calendar
 
 /** Full-text search across all call log entries (system log + LocalCallStore). */
@@ -30,6 +31,7 @@ class CallLogSearchActivity : AppCompatActivity() {
 
     private val debounce = Handler(Looper.getMainLooper())
     private var pendingNumber: String? = null
+    private val t9 = T9Buffer()
 
     private val callPermLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -89,13 +91,23 @@ class CallLogSearchActivity : AppCompatActivity() {
             debounce.postDelayed({ applyQuery(q) }, 200)
         }
         binding.clearBtn.setOnClickListener {
-            binding.searchInput.text?.clear()
+            t9.clear(); binding.searchInput.text?.clear()
         }
         binding.searchInput.requestFocus()
-        binding.searchInput.postDelayed({
-            (getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager)
-                ?.showSoftInput(binding.searchInput, InputMethodManager.SHOW_IMPLICIT)
-        }, 100)
+    }
+
+    /** Real-letter typing (same multi-tap keypad as the rest of the app): digits cycle
+     *  through letters, # switches Hebrew/English/digits, * / DEL deletes. */
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0 && t9.onKeyDown(event.keyCode)) {
+            binding.searchInput.setText(t9.text.toString())
+            binding.searchInput.setSelection(t9.text.length)
+            if (event.keyCode == KeyEvent.KEYCODE_POUND) {
+                Toast.makeText(this, t9.modeLabel(), Toast.LENGTH_SHORT).show()
+            }
+            return true
+        }
+        return super.dispatchKeyEvent(event)
     }
 
     private fun applyQuery(query: String) {
@@ -218,12 +230,7 @@ class CallLogSearchActivity : AppCompatActivity() {
 
     private fun addContact(number: String) {
         try {
-            startActivity(
-                Intent(ContactsContract.Intents.Insert.ACTION).apply {
-                    type = ContactsContract.RawContacts.CONTENT_TYPE
-                    putExtra(ContactsContract.Intents.Insert.PHONE, number)
-                }
-            )
+            AddContactActivity.start(this, number)
         } catch (_: Exception) {}
     }
 
