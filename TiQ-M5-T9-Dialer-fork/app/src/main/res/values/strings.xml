@@ -619,4 +619,13 @@
     <string name="setting_language_summary">App display language</string>
     <string name="language_title">Language</string>
     <string name="language_system">System default</string>
+    <string name="add_contact_title">New contact</string>
+    <string name="add_contact_number_label">Number</string>
+    <string name="add_contact_name_label">Name</string>
+    <string name="add_contact_name_hint">Type a name…</string>
+    <string name="add_contact_mode_hint"># switch, * delete</string>
+    <string name="add_contact_save">Save</string>
+    <string name="add_contact_name_required">Enter a name</string>
+    <string name="add_contact_saved">Contact saved</string>
+    <string name="add_contact_failed">Could not save</string>
 </resources>
