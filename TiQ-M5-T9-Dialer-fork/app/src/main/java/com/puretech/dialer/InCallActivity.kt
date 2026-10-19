@@ -1235,10 +1235,10 @@ class InCallActivity : AppCompatActivity(), CallManager.Listener {
     private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
 
     private fun renderPreview() {
-        binding.nameText.text = "Kol Mevaser"
+        binding.nameText.text = "קול מבשר"
         binding.numberText.text = "845-351-1200"
         binding.numberText.visibility = View.VISIBLE
-        Avatars.bind(binding.avatarInitial, binding.contactPhoto, "Kol Mevaser", null)
+        Avatars.bind(binding.avatarInitial, binding.contactPhoto, "קול מבשר", null)
         if (previewIncoming) {
             binding.statusText.setText(R.string.state_ringing)
             showIncomingControls()
