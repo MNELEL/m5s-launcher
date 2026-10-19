@@ -327,12 +327,7 @@ class DialerFragment : Fragment() {
         val n = dialedDigits()
         if (n.isEmpty()) return
         try {
-            startActivity(
-                Intent(ContactsContract.Intents.Insert.ACTION).apply {
-                    type = ContactsContract.RawContacts.CONTENT_TYPE
-                    putExtra(ContactsContract.Intents.Insert.PHONE, n)
-                }
-            )
+            AddContactActivity.start(requireContext(), n)
         } catch (_: Exception) {
         }
     }
@@ -531,12 +526,7 @@ class DialerFragment : Fragment() {
             if (contactUri != null) {
                 startActivity(Intent(Intent.ACTION_VIEW, contactUri))
             } else {
-                startActivity(
-                    Intent(ContactsContract.Intents.Insert.ACTION).apply {
-                        type = ContactsContract.RawContacts.CONTENT_TYPE
-                        putExtra(ContactsContract.Intents.Insert.PHONE, number)
-                    }
-                )
+                AddContactActivity.start(requireContext(), number)
             }
         } catch (_: Exception) {
         }
