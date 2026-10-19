@@ -12,8 +12,8 @@ android {
         applicationId "com.puretech.dialer"
         minSdk 29
         targetSdk 34
-        versionCode 282
-        versionName "1.2.18-m5s-t9"
+        versionCode 283
+        versionName "1.2.18-m5s-t9b"
     }
 
     // sign-rotate.ps1 builds "release" and signs it itself (apksigner re-signs
