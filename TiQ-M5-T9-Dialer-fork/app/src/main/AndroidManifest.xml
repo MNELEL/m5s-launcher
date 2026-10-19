@@ -94,6 +94,7 @@
         <activity android:name=".MissedCallsActivity" android:exported="false" />
         <activity android:name=".ContactsActivity" android:exported="false" />
         <activity android:name=".StarredActivity" android:exported="false" />
+        <activity android:name=".AddContactActivity" android:exported="false" />
         <activity android:name=".SettingsActivity" android:exported="false" />
         <activity android:name=".ThemeSettingsActivity" android:exported="false" />
         <activity android:name=".NameFormatSettingsActivity" android:exported="false" />
