@@ -171,12 +171,7 @@ class StarredActivity : AppCompatActivity() {
             if (contactUri != null) {
                 startActivity(Intent(Intent.ACTION_VIEW, contactUri))
             } else {
-                startActivity(
-                    Intent(ContactsContract.Intents.Insert.ACTION).apply {
-                        type = ContactsContract.RawContacts.CONTENT_TYPE
-                        putExtra(ContactsContract.Intents.Insert.PHONE, number)
-                    }
-                )
+                AddContactActivity.start(this, number)
             }
         } catch (_: Exception) {
         }
