@@ -453,7 +453,40 @@ class HomeActivity : AppCompatActivity() {
 
     // --- Hardware keys + intent routing ----------------------------------------
 
+    /** Real-letter typing for the shared search bar (same multi-tap keypad as the M5S
+     *  launcher: # switches Hebrew/English/digits, * / DEL deletes); the search box itself
+     *  stays a normal [NoImeEditText] field, this just feeds it. */
+    private val searchT9 = T9Buffer()
+    private var poundHandledLong = false
+
+    /** Opens the shared search bar from wherever the user currently is (Dial pad, Recents,
+     *  Voicemail) -- held down # anywhere in the app jumps straight to it. */
+    private fun openGlobalSearch() {
+        searchT9.clear()
+        if (currentTab == Tab.DIALER) showTab(Tab.RECENTS)
+        binding.searchInput.setText("")
+        binding.searchInput.requestFocus()
+    }
+
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.keyCode == KeyEvent.KEYCODE_POUND) {
+            if (event.action == KeyEvent.ACTION_DOWN) {
+                if (event.repeatCount == 1) { poundHandledLong = true; openGlobalSearch(); return true }
+                if (event.repeatCount > 1 && poundHandledLong) return true
+            } else if (event.action == KeyEvent.ACTION_UP) {
+                if (poundHandledLong) { poundHandledLong = false; return true }
+            }
+        }
+        if (binding.searchInput.hasFocus() && event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+            if (searchT9.onKeyDown(event.keyCode)) {
+                binding.searchInput.setText(searchT9.text.toString())
+                binding.searchInput.setSelection(searchT9.text.length)
+                if (event.keyCode == KeyEvent.KEYCODE_POUND) {
+                    android.widget.Toast.makeText(this, searchT9.modeLabel(), android.widget.Toast.LENGTH_SHORT).show()
+                }
+                return true
+            }
+        }
         if (currentTab == Tab.DIALER) {
             if (dialerFragment.handleKey(event)) return true
         } else if (currentTab == Tab.RECENTS && recentsFragment.handleKey(event)) {
