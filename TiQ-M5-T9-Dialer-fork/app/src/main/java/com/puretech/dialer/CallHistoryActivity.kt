@@ -184,12 +184,7 @@ class CallHistoryActivity : AppCompatActivity() {
             }
         } else {
             try {
-                startActivity(
-                    android.content.Intent(ContactsContract.Intents.Insert.ACTION).apply {
-                        type = ContactsContract.RawContacts.CONTENT_TYPE
-                        putExtra(ContactsContract.Intents.Insert.PHONE, number)
-                    }
-                )
+                AddContactActivity.start(this, number)
             } catch (_: Exception) {
             }
         }
