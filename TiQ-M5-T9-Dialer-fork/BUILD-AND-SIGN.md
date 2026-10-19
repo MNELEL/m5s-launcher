@@ -47,3 +47,12 @@ A ready-made workflow is included at `.github/workflows/build.yml`. To use it:
    to copy to the phone and install.
 No Android Studio, Gradle, or SDK installation needed on your side; GitHub's own servers
 do the build, using the `puretech-m5s.jks` keystore already included in this folder.
+
+## 1.2.18-m5s-t9b
+- Real letter typing (same multi-tap keypad as the M5S launcher: digit keys cycle through
+  Hebrew/English/digit letters, `#` switches mode, `*`/DEL deletes) instead of raw digits, in:
+  the shared search bar (Recents/Voicemail), the call-log search screen, and the contacts list.
+- Held `#` opens that search from anywhere in the app (dial pad, recents, voicemail).
+- New "add contact" screen, replacing every place that opened the system contact editor: the
+  name is typed with the same keypad letters. Saved with no explicit account, so it lands in
+  whichever account is set as "Default account for new contacts" in Settings > Accounts.
